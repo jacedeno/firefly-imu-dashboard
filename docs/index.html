@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#05070e">
+  <title>Firefly · Blue Ghost IMU</title>
+  <link rel="icon" type="image/png" href="assets/firefly-logo.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+  <!-- Three.js r128 (UMD) + addons. Classic scripts run before the deferred ES modules. -->
+  <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/MaskPass.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+</head>
+<body>
+  <!-- ============ Connect overlay (Web Bluetooth needs a user gesture) ============ -->
+  <div id="overlay" class="overlay">
+    <div class="overlay-card">
+      <img class="overlay-logo" src="assets/firefly-logo.png" alt="Firefly">
+      <div class="overlay-kicker">Firefly Aerospace</div>
+      <h1 class="overlay-title">BLUE&nbsp;GHOST<span>IMU&nbsp;TELEMETRY</span></h1>
+      <p class="overlay-sub">Real-time 9-DOF attitude · streamed over Bluetooth LE</p>
+      <button id="btn-connect" class="btn btn-primary">
+        <span class="btn-dot"></span> Connect device
+      </button>
+      <button id="btn-sim" class="btn btn-ghost">Run in demo mode</button>
+      <p id="overlay-note" class="overlay-note">Chrome or Edge required · desktop or Android</p>
+    </div>
+    <div class="overlay-stars" aria-hidden="true"></div>
+  </div>
+
+  <!-- ============ Dashboard ============ -->
+  <div id="app" class="app hidden">
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-logo" src="assets/firefly-logo.png" alt="">
+        <span class="brand-text">FIREFLY · <b>BLUE GHOST</b> <span class="brand-sub">IMU</span></span>
+      </div>
+      <div class="status">
+        <span id="link-state" class="chip chip-live"><span class="dot"></span><span id="link-label">DEMO</span></span>
+        <span class="chip"><span class="chip-k">RATE</span><span id="rate-val" class="chip-v">0&nbsp;Hz</span></span>
+        <span class="chip"><span class="chip-k">FPS</span><span id="fps-val" class="chip-v">60</span></span>
+        <span class="chip"><span class="chip-k">TIER</span><span id="tier-val" class="chip-v">—</span></span>
+      </div>
+    </header>
+
+    <!-- 3D viewport -->
+    <main id="viewport" class="viewport">
+      <div class="frame-bracket tl"></div><div class="frame-bracket tr"></div>
+      <div class="frame-bracket bl"></div><div class="frame-bracket br"></div>
+
+      <!-- Attitude indicator (artificial horizon) -->
+      <div class="adi-wrap">
+        <div class="adi">
+          <div id="adi-ball" class="adi-ball">
+            <div class="adi-sky"></div>
+            <div class="adi-gnd"></div>
+            <div class="adi-line"></div>
+            <div class="adi-ladder"></div>
+          </div>
+          <div class="adi-mask"></div>
+          <div class="adi-craft"></div>
+          <div class="adi-bezel"></div>
+        </div>
+        <div class="adi-meta">
+          <div><span class="k">HDG</span><span id="hdg-val" class="v">000°</span></div>
+          <div><span class="k">CAL</span><span id="cal-val" class="v ok">✓</span></div>
+        </div>
+      </div>
+
+      <a id="credit" class="credit" href="https://geekendzone.com" target="_blank" rel="noopener">Crafted by GeekendZone</a>
+    </main>
+
+    <!-- Telemetry rail -->
+    <aside class="rail">
+      <section class="card">
+        <div class="card-title">Quaternion</div>
+        <div class="quat">
+          <div class="quat-cell"><span class="k">W</span><span id="q-w" class="v">0.000</span></div>
+          <div class="quat-cell"><span class="k">X</span><span id="q-x" class="v">0.000</span></div>
+          <div class="quat-cell"><span class="k">Y</span><span id="q-y" class="v">0.000</span></div>
+          <div class="quat-cell"><span class="k">Z</span><span id="q-z" class="v">0.000</span></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Attitude</div>
+        <div class="rpy">
+          <div class="rpy-cell"><span class="k">ROLL</span><span id="roll-val" class="v">0.0°</span></div>
+          <div class="rpy-cell"><span class="k">PITCH</span><span id="pitch-val" class="v">0.0°</span></div>
+          <div class="rpy-cell"><span class="k">YAW</span><span id="yaw-val" class="v">0.0°</span></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Accelerometer <span class="unit">m/s²</span></div>
+        <canvas id="accel-chart" class="chart" width="360" height="76"></canvas>
+        <div class="legend"><span class="lx">X</span><span class="ly">Y</span><span class="lz">Z</span></div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">Gyroscope <span class="unit">rad/s</span></div>
+        <canvas id="gyro-chart" class="chart" width="360" height="76"></canvas>
+        <div class="legend"><span class="lx">X</span><span class="ly">Y</span><span class="lz">Z</span></div>
+      </section>
+    </aside>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
