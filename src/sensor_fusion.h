@@ -141,3 +141,80 @@ private:
     float _sampleFreq;
     float _q0, _q1, _q2, _q3;
 };
+
+
+// Mahony AHRS filter. Unlike Madgwick it has an integral term (Ki) that
+// estimates and removes gyro bias online, so heading holds without a perfect
+// boot-time gyro calibration and without yaw drift. Kp = responsiveness.
+class MahonyFilter {
+public:
+    MahonyFilter(float kp = 0.4f, float ki = 0.08f, float sampleFreq = 119.0f)
+        : _twoKp(2.0f * kp), _twoKi(2.0f * ki), _freq(sampleFreq),
+          _q0(1.0f), _q1(0.0f), _q2(0.0f), _q3(0.0f),
+          _ibx(0.0f), _iby(0.0f), _ibz(0.0f) {}
+
+    void setSampleFreq(float hz) { if (hz > 1.0f) _freq = hz; }
+
+    void update(float gx, float gy, float gz, float ax, float ay, float az) {
+        float q0 = _q0, q1 = _q1, q2 = _q2, q3 = _q3;
+        if (!(ax == 0.0f && ay == 0.0f && az == 0.0f)) {
+            float rn = 1.0f / sqrtf(ax*ax + ay*ay + az*az); ax*=rn; ay*=rn; az*=rn;
+            float hvx = q1*q3 - q0*q2, hvy = q0*q1 + q2*q3, hvz = q0*q0 - 0.5f + q3*q3;
+            float ex = ay*hvz - az*hvy, ey = az*hvx - ax*hvz, ez = ax*hvy - ay*hvx;
+            applyFeedback(gx, gy, gz, ex, ey, ez);
+        }
+        integrate(q0, q1, q2, q3, gx, gy, gz);
+    }
+
+    void updateMag(float gx, float gy, float gz, float ax, float ay, float az,
+                   float mx, float my, float mz) {
+        if (mx == 0.0f && my == 0.0f && mz == 0.0f) { update(gx, gy, gz, ax, ay, az); return; }
+        float q0 = _q0, q1 = _q1, q2 = _q2, q3 = _q3;
+        if (!(ax == 0.0f && ay == 0.0f && az == 0.0f)) {
+            float rn = 1.0f / sqrtf(ax*ax + ay*ay + az*az); ax*=rn; ay*=rn; az*=rn;
+            rn = 1.0f / sqrtf(mx*mx + my*my + mz*mz); mx*=rn; my*=rn; mz*=rn;
+            float q0q0=q0*q0,q0q1=q0*q1,q0q2=q0*q2,q0q3=q0*q3,q1q1=q1*q1,q1q2=q1*q2,q1q3=q1*q3,q2q2=q2*q2,q2q3=q2*q3,q3q3=q3*q3;
+            float hx = 2.0f*(mx*(0.5f-q2q2-q3q3) + my*(q1q2-q0q3) + mz*(q1q3+q0q2));
+            float hy = 2.0f*(mx*(q1q2+q0q3) + my*(0.5f-q1q1-q3q3) + mz*(q2q3-q0q1));
+            float bx = sqrtf(hx*hx + hy*hy);
+            float bz = 2.0f*(mx*(q1q3-q0q2) + my*(q2q3+q0q1) + mz*(0.5f-q1q1-q2q2));
+            float hvx = q1q3-q0q2, hvy = q0q1+q2q3, hvz = q0q0-0.5f+q3q3;
+            float hwx = bx*(0.5f-q2q2-q3q3) + bz*(q1q3-q0q2);
+            float hwy = bx*(q1q2-q0q3) + bz*(q0q1+q2q3);
+            float hwz = bx*(q0q2+q1q3) + bz*(0.5f-q1q1-q2q2);
+            float ex = (ay*hvz-az*hvy) + (my*hwz-mz*hwy);
+            float ey = (az*hvx-ax*hvz) + (mz*hwx-mx*hwz);
+            float ez = (ax*hvy-ay*hvx) + (mx*hwy-my*hwx);
+            applyFeedback(gx, gy, gz, ex, ey, ez);
+        }
+        integrate(q0, q1, q2, q3, gx, gy, gz);
+    }
+
+    float w() const { return _q0; }
+    float x() const { return _q1; }
+    float y() const { return _q2; }
+    float z() const { return _q3; }
+
+private:
+    void applyFeedback(float &gx, float &gy, float &gz, float ex, float ey, float ez) {
+        if (_twoKi > 0.0f) {
+            float dt = 1.0f / _freq;
+            _ibx += _twoKi * ex * dt; _iby += _twoKi * ey * dt; _ibz += _twoKi * ez * dt;
+            gx += _ibx; gy += _iby; gz += _ibz;
+        }
+        gx += _twoKp * ex; gy += _twoKp * ey; gz += _twoKp * ez;
+    }
+    void integrate(float q0, float q1, float q2, float q3, float gx, float gy, float gz) {
+        float dt = 1.0f / _freq; gx *= 0.5f*dt; gy *= 0.5f*dt; gz *= 0.5f*dt;
+        float qa = q0, qb = q1, qc = q2;
+        q0 += (-qb*gx - qc*gy - q3*gz);
+        q1 += ( qa*gx + qc*gz - q3*gy);
+        q2 += ( qa*gy - qb*gz + q3*gx);
+        q3 += ( qa*gz + qb*gy - qc*gx);
+        float rn = 1.0f / sqrtf(q0*q0 + q1*q1 + q2*q2 + q3*q3);
+        _q0 = q0*rn; _q1 = q1*rn; _q2 = q2*rn; _q3 = q3*rn;
+    }
+    float _twoKp, _twoKi, _freq;
+    float _q0, _q1, _q2, _q3;
+    float _ibx, _iby, _ibz;
+};

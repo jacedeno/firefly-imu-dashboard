@@ -28,7 +28,9 @@ static const float MAG_OFF[3] = { -5.7f, 32.1f, -4.5f };            // hard-iron
 static const float MAG_SCL[3] = { 1.053f, 1.030f, 0.927f };         // soft-iron
 static const bool  USE_MAG = true;                                  // 9-DOF enabled
 
-MadgwickFilter filter(0.2f, 119.0f);  // higher beta = faster/tighter mag yaw lock
+// Mahony AHRS: Kp=responsiveness, Ki=online gyro-bias estimation (kills yaw drift
+// without a perfect boot calibration). Same update()/updateMag()/getters as before.
+MahonyFilter filter(0.4f, 0.08f, 119.0f);
 
 // Gyro bias (dps), measured at boot while still.
 float gbx = 0, gby = 0, gbz = 0;
