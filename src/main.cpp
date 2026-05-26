@@ -20,22 +20,20 @@ static const float Q_SCALE = 30000.0f, A_SCALE = 100.0f, G_SCALE = 1000.0f;
 static const float DEG2RAD = 0.01745329252f;
 static const float G_MS2   = 9.80665f;
 
-// ---- Magnetometer axis sign correction (LSM9DS1 frame vs accel/gyro).
-// If heading turns the wrong way or is unstable, flip one of these to -1.
-static const float MAG_FX = 1.0f, MAG_FY = 1.0f, MAG_FZ = 1.0f;
+// ---- Magnetometer calibration (from on-device tumble calibration, 2026-05-25).
+// LSM9DS1 mag axes vs accel/gyro frame: X aligned, Y & Z negated (180deg about
+// X). Verified by min-variance of accel.mag over a full-sphere tumble (dip ~55deg).
+static const float MAG_FX = 1.0f, MAG_FY = -1.0f, MAG_FZ = -1.0f;   // axis sign map
+static const float MAG_OFF[3] = { -5.7f, 32.1f, -4.5f };            // hard-iron (uT)
+static const float MAG_SCL[3] = { 1.053f, 1.030f, 0.927f };         // soft-iron
+static const bool  USE_MAG = true;                                  // 9-DOF enabled
 
-// 6-DOF baseline (stable pitch/roll, slow yaw drift). The LSM9DS1 magnetometer
-// axes are NOT aligned with the accel/gyro frame, so naive 9-DOF fusion makes
-// yaw precess. Re-enable only with a verified mag axis map + hard/soft-iron cal.
-static const bool USE_MAG = false;
-
-MadgwickFilter filter(0.12f, 119.0f);
+MadgwickFilter filter(0.2f, 119.0f);  // higher beta = faster/tighter mag yaw lock
 
 // Gyro bias (dps), measured at boot while still.
 float gbx = 0, gby = 0, gbz = 0;
 
-// Running hard-iron min/max (raw uT) + latest calibrated mag.
-float mnX = 1e9, mnY = 1e9, mnZ = 1e9, mxX = -1e9, mxY = -1e9, mxZ = -1e9;
+// Latest calibrated magnetometer (body frame).
 float magX = 0, magY = 0, magZ = 0;
 bool  haveMag = false, magReady = false;
 
@@ -105,17 +103,13 @@ void setup() {
 void loop() {
   BLE.poll();
 
-  // Magnetometer (~20 Hz): update running hard-iron calibration.
+  // Magnetometer (~20 Hz): fixed hard/soft-iron + axis-sign map.
   if (IMU.magneticFieldAvailable()) {
     float rx, ry, rz; IMU.readMagneticField(rx, ry, rz);
-    mnX = min(mnX, rx); mxX = max(mxX, rx);
-    mnY = min(mnY, ry); mxY = max(mxY, ry);
-    mnZ = min(mnZ, rz); mxZ = max(mxZ, rz);
-    magX = (rx - (mnX + mxX) * 0.5f) * MAG_FX;
-    magY = (ry - (mnY + mxY) * 0.5f) * MAG_FY;
-    magZ = (rz - (mnZ + mxZ) * 0.5f) * MAG_FZ;
-    haveMag = true;
-    magReady = (mxX - mnX) > 25 && (mxY - mnY) > 25 && (mxZ - mnZ) > 25;
+    magX = (rx - MAG_OFF[0]) * MAG_SCL[0] * MAG_FX;
+    magY = (ry - MAG_OFF[1]) * MAG_SCL[1] * MAG_FY;
+    magZ = (rz - MAG_OFF[2]) * MAG_SCL[2] * MAG_FZ;
+    haveMag = true; magReady = true;
   }
 
   // Accel + gyro (~119 Hz): run fusion.
@@ -127,8 +121,8 @@ void loop() {
     float rgy = (gy - gby) * DEG2RAD;
     float rgz = (gz - gbz) * DEG2RAD;
 
-    if (USE_MAG && magReady && haveMag) filter.updateMag(rgx, rgy, rgz, ax, ay, az, magX, magY, magZ);
-    else                                filter.update(rgx, rgy, rgz, ax, ay, az);
+    if (USE_MAG && haveMag) filter.updateMag(rgx, rgy, rgz, ax, ay, az, magX, magY, magZ);
+    else                    filter.update(rgx, rgy, rgz, ax, ay, az);
 
     sampleCount++; hzCount++;
 
