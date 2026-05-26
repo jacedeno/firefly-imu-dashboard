@@ -1,270 +1,158 @@
+// Firefly Blue Ghost IMU — Arduino Nano 33 BLE (LSM9DS1) firmware.
+// Reads the onboard 9-axis IMU, runs 9-DOF Madgwick fusion (with a running
+// hard-iron magnetometer calibration), and streams the orientation over BLE
+// to the Web Bluetooth dashboard.
+//
+// BLE characteristic payload = 10x int16 little-endian (20 bytes), matching
+// docs/js/ble.js:
+//   q.w q.x q.y q.z (x30000)  ax ay az [m/s^2] (x100)  gx gy gz [rad/s] (x1000)
 #include <Arduino.h>
-#include <Wire.h>
-#include <WiFi.h>
-#include <DNSServer.h>
-#include <LittleFS.h>
-#include <ESPAsyncWebServer.h>
-#include <ArduinoJson.h>
-#include "MPU9250.h"
+#include <ArduinoBLE.h>
+#include <Arduino_LSM9DS1.h>
 #include "sensor_fusion.h"
 
-// --- Pin and I2C config ---
-// XIAO ESP32-S3: silk "D4"=GPIO5 (SDA), silk "D5"=GPIO6 (SCL).
-static constexpr int PIN_SDA = 5;
-static constexpr int PIN_SCL = 6;
-static constexpr uint32_t I2C_FREQ = 400000;
-static constexpr uint8_t MPU_ADDR = 0x68;
+// ---- BLE (UUIDs must match docs/js/ble.js) ----
+BLEService          imuService("19b10000-e8f2-537e-4f6c-d104768a1214");
+BLECharacteristic   imuChar("19b10001-e8f2-537e-4f6c-d104768a1214", BLERead | BLENotify, 20);
 
-// --- WiFi AP config ---
-static const char* AP_SSID = "NASA-Shuttle-IMU";
-static const char* AP_PASS = "12345678";
+// ---- Scales (must match the dashboard de-scaling) ----
+static const float Q_SCALE = 30000.0f, A_SCALE = 100.0f, G_SCALE = 1000.0f;
+static const float DEG2RAD = 0.01745329252f;
+static const float G_MS2   = 9.80665f;
 
-// --- Timing ---
-static constexpr float SENSOR_HZ = 200.0f;
-static constexpr uint32_t SENSOR_PERIOD_MS = 1000 / (uint32_t)SENSOR_HZ; // 5ms
-static constexpr float WS_HZ = 60.0f;
-static constexpr uint32_t WS_PERIOD_MS = 1000 / (uint32_t)WS_HZ;        // 16ms
+// ---- Magnetometer axis sign correction (LSM9DS1 frame vs accel/gyro).
+// If heading turns the wrong way or is unstable, flip one of these to -1.
+static const float MAG_FX = 1.0f, MAG_FY = 1.0f, MAG_FZ = 1.0f;
 
-// --- IMU state ---
-static bool mpuReady = false;
+MadgwickFilter filter(0.12f, 119.0f);
 
-// --- Shared sensor data ---
-struct SensorData {
-    float w, x, y, z;       // quaternion
-    float ax, ay, az;        // accel (m/s^2)
-    float gx, gy, gz;        // gyro (rad/s)
-    bool valid;
-};
+// Gyro bias (dps), measured at boot while still.
+float gbx = 0, gby = 0, gbz = 0;
 
-static SensorData sensorData = {};
-static SemaphoreHandle_t dataMutex;
+// Running hard-iron min/max (raw uT) + latest calibrated mag.
+float mnX = 1e9, mnY = 1e9, mnZ = 1e9, mxX = -1e9, mxY = -1e9, mxZ = -1e9;
+float magX = 0, magY = 0, magZ = 0;
+bool  haveMag = false, magReady = false;
 
-// --- Hardware ---
-static MPU9250 imu(Wire, MPU_ADDR);
-static MadgwickFilter filter(0.2f, SENSOR_HZ);
+uint32_t lastNotify = 0, lastDbg = 0, sampleCount = 0, hzCount = 0, hzTime = 0;
 
-// --- Network ---
-static DNSServer dnsServer;
-static AsyncWebServer server(80);
-static AsyncWebSocket ws("/ws");
-
-// --- Sensor task (Core 1, 200 Hz) ---
-void sensorTask(void* param) {
-    TickType_t lastWake = xTaskGetTickCount();
-
-    for (;;) {
-        if (imu.readSensor() > 0) {
-            float ax = imu.getAccelX_mss();
-            float ay = imu.getAccelY_mss();
-            float az = imu.getAccelZ_mss();
-            float gx = imu.getGyroX_rads();
-            float gy = imu.getGyroY_rads();
-            float gz = imu.getGyroZ_rads();
-
-            filter.update(gx, gy, gz, ax, ay, az);
-
-            if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(1)) == pdTRUE) {
-                sensorData.w  = filter.w();
-                sensorData.x  = filter.x();
-                sensorData.y  = filter.y();
-                sensorData.z  = filter.z();
-                sensorData.ax = ax;
-                sensorData.ay = ay;
-                sensorData.az = az;
-                sensorData.gx = gx;
-                sensorData.gy = gy;
-                sensorData.gz = gz;
-                sensorData.valid = true;
-                xSemaphoreGive(dataMutex);
-            }
-        }
-
-        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(SENSOR_PERIOD_MS));
-    }
+static int16_t clamp16(float v) {
+  if (v > 32767.0f) return 32767;
+  if (v < -32768.0f) return -32768;
+  return (int16_t)lroundf(v);
 }
 
-// --- WebSocket event handler ---
-void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
-               AwsEventType type, void* arg, uint8_t* data, size_t len) {
-    if (type == WS_EVT_CONNECT) {
-        Serial.printf("[WS] Client #%u connected\n", client->id());
-    } else if (type == WS_EVT_DISCONNECT) {
-        Serial.printf("[WS] Client #%u disconnected\n", client->id());
+void calibrateGyro() {
+  Serial.println("[cal] keep board STILL — measuring gyro bias...");
+  const int N = 200;
+  double sx = 0, sy = 0, sz = 0; int got = 0;
+  uint32_t t0 = millis();
+  while (got < N && millis() - t0 < 4000) {
+    if (IMU.gyroscopeAvailable()) {
+      float x, y, z; IMU.readGyroscope(x, y, z);
+      sx += x; sy += y; sz += z; got++;
     }
+  }
+  if (got > 0) { gbx = sx / got; gby = sy / got; gbz = sz / got; }
+  Serial.print("[cal] gyro bias (dps): ");
+  Serial.print(gbx, 3); Serial.print(", "); Serial.print(gby, 3); Serial.print(", "); Serial.println(gbz, 3);
 }
+
+void onConnect(BLEDevice c) { Serial.print("[ble] connected: "); Serial.println(c.address()); }
+void onDisconnect(BLEDevice c) { Serial.println("[ble] disconnected — re-advertising"); BLE.advertise(); }
 
 void setup() {
-    Serial.begin(115200);
-    while (!Serial && millis() < 3000) {}
-    Serial.println("\n[BOOT] ESP32-S3 MPU-9250 Dashboard");
+  Serial.begin(115200);
+  uint32_t t0 = millis();
+  while (!Serial && millis() - t0 < 2000) {}
 
-    // I2C
-    Wire.begin(PIN_SDA, PIN_SCL);
-    Wire.setClock(I2C_FREQ);
+  Serial.println("\n=== Firefly Blue Ghost IMU (Nano 33 BLE / LSM9DS1) ===");
 
-    // I2C scan
-    Serial.println("[I2C] Scanning...");
-    for (uint8_t addr = 1; addr < 127; addr++) {
-        Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0) {
-            Serial.printf("[I2C] Device found at 0x%02X\n", addr);
-        }
-    }
+  if (!IMU.begin()) {
+    Serial.println("[imu] LSM9DS1 begin() FAILED — halting");
+    while (1) { delay(1000); }
+  }
+  float odr = IMU.accelerationSampleRate();
+  filter.setSampleFreq(odr > 1.0f ? odr : 119.0f);
+  Serial.print("[imu] LSM9DS1 OK, accel/gyro ODR "); Serial.print(odr); Serial.println(" Hz");
 
-    // MPU-9250 init
-    int status = imu.begin();
-    if (status < 0) {
-        Serial.printf("[MPU] Init FAILED (status %d). WiFi will start without sensor.\n", status);
-    } else {
-        Serial.println("[MPU] Init OK");
-        imu.setAccelRange(MPU9250::ACCEL_RANGE_8G);
-        imu.setGyroRange(MPU9250::GYRO_RANGE_500DPS);
-        imu.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
-        imu.setSrd(4); // 1000/(4+1) = 200 Hz
+  calibrateGyro();
 
-        // Remove gyro bias so the model doesn't drift when stationary.
-        // Board MUST stay still during this (~2s).
-        Serial.println("[MPU] Calibrating gyro - keep board STILL...");
-        if (imu.calibrateGyro() > 0) {
-            Serial.printf("[MPU] Gyro calibrated (bias x=%.4f y=%.4f z=%.4f rad/s)\n",
-                          imu.getGyroBiasX_rads(), imu.getGyroBiasY_rads(),
-                          imu.getGyroBiasZ_rads());
-        } else {
-            Serial.println("[MPU] Gyro calibration FAILED (continuing without)");
-        }
-
-        mpuReady = true;
-    }
-
-    // LittleFS
-    if (!LittleFS.begin(true)) {
-        Serial.println("[FS] LittleFS mount FAILED. No web UI.");
-    } else {
-        Serial.println("[FS] LittleFS mounted");
-    }
-
-    // WiFi AP
-    WiFi.mode(WIFI_AP);
-    bool apOk = WiFi.softAP(AP_SSID, AP_PASS, 1);
-    delay(100);
-    // Low TX power on purpose: phone connects from close range, and lower
-    // power means smaller current spikes (helps AP stability on marginal USB).
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
-    Serial.printf("[WiFi] softAP() returned %s\n", apOk ? "true" : "false");
-    Serial.printf("[WiFi] AP started: %s @ %s (ch %d, MAC %s, txpwr %d)\n",
-                  AP_SSID, WiFi.softAPIP().toString().c_str(),
-                  WiFi.channel(), WiFi.softAPmacAddress().c_str(),
-                  WiFi.getTxPower());
-
-    // Captive portal DNS: resolve all domains to our IP
-    dnsServer.start(53, "*", WiFi.softAPIP());
-    Serial.println("[DNS] Captive portal DNS started");
-
-    // WebSocket
-    ws.onEvent(onWsEvent);
-    server.addHandler(&ws);
-
-    // Captive portal: respond what each OS expects so they think there IS internet
-    // Android: expects HTTP 204
-    server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *r) {
-        r->send(204);
-    });
-    // Android alternate
-    server.on("/gen_204", HTTP_GET, [](AsyncWebServerRequest *r) {
-        r->send(204);
-    });
-    // Windows: expects "Microsoft Connect Test" with 200
-    server.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest *r) {
-        r->send(200, "text/plain", "Microsoft Connect Test");
-    });
-    // Windows NCSI
-    server.on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest *r) {
-        r->send(200, "text/plain", "Microsoft NCSI");
-    });
-    // Apple: expects 200 with "Success"
-    server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *r) {
-        r->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
-    });
-    server.on("/library/test/success.html", HTTP_GET, [](AsyncWebServerRequest *r) {
-        r->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
-    });
-    // Firefox
-    server.on("/canonical.html", HTTP_GET, [](AsyncWebServerRequest *r) {
-        r->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
-    });
-    server.on("/success.txt", HTTP_GET, [](AsyncWebServerRequest *r) {
-        r->send(200, "text/plain", "success\n");
-    });
-
-    // Serve static files from LittleFS
-    server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
-
-    server.begin();
-    Serial.println("[HTTP] Server started on port 80");
-
-    // Mutex
-    dataMutex = xSemaphoreCreateMutex();
-
-    // Sensor task on Core 1 (only if MPU is ready)
-    if (mpuReady) {
-        TaskHandle_t sensorHandle = nullptr;
-        xTaskCreatePinnedToCore(sensorTask, "SensorTask", 8192, nullptr, 2,
-                                &sensorHandle, 1);
-        Serial.println("[TASK] Sensor task started on Core 1");
-    } else {
-        Serial.println("[TASK] Sensor task SKIPPED (no MPU)");
-    }
+  if (!BLE.begin()) {
+    Serial.println("[ble] begin() FAILED — halting");
+    while (1) { delay(1000); }
+  }
+  BLE.setLocalName("Firefly-BlueGhost-IMU");
+  BLE.setDeviceName("Firefly-BlueGhost-IMU");
+  BLE.setAdvertisedService(imuService);
+  imuService.addCharacteristic(imuChar);
+  BLE.addService(imuService);
+  uint8_t zero[20] = {0};
+  imuChar.writeValue(zero, 20);
+  BLE.setConnectionInterval(12, 24); // 15–30 ms → supports ~60 Hz notify
+  BLE.setEventHandler(BLEConnected, onConnect);
+  BLE.setEventHandler(BLEDisconnected, onDisconnect);
+  BLE.advertise();
+  Serial.println("[ble] advertising as 'Firefly-BlueGhost-IMU'");
+  hzTime = millis();
 }
 
 void loop() {
-    dnsServer.processNextRequest();
+  BLE.poll();
 
-    static uint32_t lastWsBroadcast = 0;
-    static uint32_t lastHeartbeat = 0;
+  // Magnetometer (~20 Hz): update running hard-iron calibration.
+  if (IMU.magneticFieldAvailable()) {
+    float rx, ry, rz; IMU.readMagneticField(rx, ry, rz);
+    mnX = min(mnX, rx); mxX = max(mxX, rx);
+    mnY = min(mnY, ry); mxY = max(mxY, ry);
+    mnZ = min(mnZ, rz); mxZ = max(mxZ, rz);
+    magX = (rx - (mnX + mxX) * 0.5f) * MAG_FX;
+    magY = (ry - (mnY + mxY) * 0.5f) * MAG_FY;
+    magZ = (rz - (mnZ + mxZ) * 0.5f) * MAG_FZ;
+    haveMag = true;
+    magReady = (mxX - mnX) > 25 && (mxY - mnY) > 25 && (mxZ - mnZ) > 25;
+  }
+
+  // Accel + gyro (~119 Hz): run fusion.
+  if (IMU.accelerationAvailable() && IMU.gyroscopeAvailable()) {
+    float ax, ay, az, gx, gy, gz;
+    IMU.readAcceleration(ax, ay, az);          // g
+    IMU.readGyroscope(gx, gy, gz);             // dps
+    float rgx = (gx - gbx) * DEG2RAD;
+    float rgy = (gy - gby) * DEG2RAD;
+    float rgz = (gz - gbz) * DEG2RAD;
+
+    if (magReady && haveMag) filter.updateMag(rgx, rgy, rgz, ax, ay, az, magX, magY, magZ);
+    else                     filter.update(rgx, rgy, rgz, ax, ay, az);
+
+    sampleCount++; hzCount++;
 
     uint32_t now = millis();
-
-    if (now - lastHeartbeat >= 2000) {
-        lastHeartbeat = now;
-        Serial.printf("[HB] up=%lus heap=%u stations=%u wsClients=%u APIP=%s\n",
-                      now / 1000, ESP.getFreeHeap(),
-                      WiFi.softAPgetStationNum(), ws.count(),
-                      WiFi.softAPIP().toString().c_str());
+    if (now - lastNotify >= 16 && BLE.connected()) {  // ~60 Hz
+      lastNotify = now;
+      int16_t p[10];
+      p[0] = clamp16(filter.w() * Q_SCALE);
+      p[1] = clamp16(filter.x() * Q_SCALE);
+      p[2] = clamp16(filter.y() * Q_SCALE);
+      p[3] = clamp16(filter.z() * Q_SCALE);
+      p[4] = clamp16(ax * G_MS2 * A_SCALE);
+      p[5] = clamp16(ay * G_MS2 * A_SCALE);
+      p[6] = clamp16(az * G_MS2 * A_SCALE);
+      p[7] = clamp16(rgx * G_SCALE);
+      p[8] = clamp16(rgy * G_SCALE);
+      p[9] = clamp16(rgz * G_SCALE);
+      imuChar.writeValue((uint8_t *)p, 20);     // Cortex-M is little-endian
     }
-    if (now - lastWsBroadcast >= WS_PERIOD_MS) {
-        lastWsBroadcast = now;
+  }
 
-        ws.cleanupClients();
-
-        if (ws.count() > 0) {
-            SensorData d;
-            bool got = false;
-
-            if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(1)) == pdTRUE) {
-                d = sensorData;
-                got = sensorData.valid;
-                xSemaphoreGive(dataMutex);
-            }
-
-            if (got) {
-                JsonDocument doc;
-                doc["w"]  = serialized(String(d.w, 4));
-                doc["x"]  = serialized(String(d.x, 4));
-                doc["y"]  = serialized(String(d.y, 4));
-                doc["z"]  = serialized(String(d.z, 4));
-                doc["ax"] = serialized(String(d.ax, 2));
-                doc["ay"] = serialized(String(d.ay, 2));
-                doc["az"] = serialized(String(d.az, 2));
-                doc["gx"] = serialized(String(d.gx, 3));
-                doc["gy"] = serialized(String(d.gy, 3));
-                doc["gz"] = serialized(String(d.gz, 3));
-
-                char buf[256];
-                size_t len = serializeJson(doc, buf, sizeof(buf));
-                ws.textAll(buf, len);
-            }
-        }
-    }
-
-    delay(1);
+  uint32_t now = millis();
+  if (now - lastDbg >= 1000) {
+    float hz = hzCount * 1000.0f / (now - hzTime);
+    hzCount = 0; hzTime = now; lastDbg = now;
+    Serial.print("[run] fuse "); Serial.print(hz, 0); Serial.print(" Hz | q=");
+    Serial.print(filter.w(), 3); Serial.print(","); Serial.print(filter.x(), 3); Serial.print(",");
+    Serial.print(filter.y(), 3); Serial.print(","); Serial.print(filter.z(), 3);
+    Serial.print(" | mag "); Serial.print(magReady ? "READY" : "calibrating(move it)");
+    Serial.print(" | ble "); Serial.println(BLE.connected() ? "connected" : "advertising");
+  }
 }
