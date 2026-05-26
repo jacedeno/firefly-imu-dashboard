@@ -11,8 +11,9 @@ el transporte de datos de WiFi a **BLE (Web Bluetooth)** y rebrandeamos el tema 
 al lander lunar **Blue Ghost de Firefly Aerospace** (donde el hijo del usuario hace internship).
 
 ## Decisiones tomadas (confirmadas con el usuario)
-- **Hardware**: usar el Arduino Nano 33 BLE Sense que ya tiene. Confirmar Rev1 vs Rev2 en casa
-  (cambia solo la librería del IMU; ambas son 9 ejes con magnetómetro).
+- **Hardware**: Arduino Nano 33 BLE. **CONFIRMADO por diagnóstico HW (2026-05-25):** trae el ST
+  **LSM9DS1** (9 ejes), `IMU.begin()` OK, ODR accel/gyro **119 Hz**, mag **20 Hz**, lib
+  `Arduino_LSM9DS1`. El IMU vive en el bus interno `Wire1`. (No es BMI270/Rev2.)
 - **Transporte**: BLE / Web Bluetooth (no WiFi). Acepta que no corre en iOS Safari (sí Chrome/Edge
   en PC y Android).
 - **Fusión**: 9-DOF con magnetómetro (yaw absoluto sin deriva) → requiere calibración del mag.
@@ -178,7 +179,8 @@ Hoy solo tiene `update(gx,gy,gz, ax,ay,az)` (6-DOF, sin mag; líneas 10-14, 82-8
 ## Hitos / orden de ejecución
 0. **Fase 0**: crear `firefly-imu-dashboard` (copia del actual, git nuevo), escribir README.md +
    CLAUDE.md + PLAN, `gh repo create --public` + primer push. Repo original intacto.
-1. **Confirmar revisión** del Nano en casa → fijar la librería IMU en `platformio.ini`.
+1. ~~Confirmar revisión del Nano~~ ✅ **HECHO (2026-05-25):** LSM9DS1 9-ejes confirmado por HW
+   (ODR 119/119/20 Hz, bus `Wire1`, lib `Arduino_LSM9DS1`). Toolchain `nordicnrf52` ya instalado.
 2. **Firmware mínimo**: IMU 9 ejes + Madgwick 9-DOF + BLE notify (int16×10). Verificar con app
    **nRF Connect** (móvil) o un scanner BLE que la característica notifica datos coherentes.
 3. **Calibración del mag**: rutina figura-8 + persistencia; validar yaw estable apuntando al norte.
