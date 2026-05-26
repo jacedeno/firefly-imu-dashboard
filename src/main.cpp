@@ -24,6 +24,11 @@ static const float G_MS2   = 9.80665f;
 // If heading turns the wrong way or is unstable, flip one of these to -1.
 static const float MAG_FX = 1.0f, MAG_FY = 1.0f, MAG_FZ = 1.0f;
 
+// 6-DOF baseline (stable pitch/roll, slow yaw drift). The LSM9DS1 magnetometer
+// axes are NOT aligned with the accel/gyro frame, so naive 9-DOF fusion makes
+// yaw precess. Re-enable only with a verified mag axis map + hard/soft-iron cal.
+static const bool USE_MAG = false;
+
 MadgwickFilter filter(0.12f, 119.0f);
 
 // Gyro bias (dps), measured at boot while still.
@@ -122,8 +127,8 @@ void loop() {
     float rgy = (gy - gby) * DEG2RAD;
     float rgz = (gz - gbz) * DEG2RAD;
 
-    if (magReady && haveMag) filter.updateMag(rgx, rgy, rgz, ax, ay, az, magX, magY, magZ);
-    else                     filter.update(rgx, rgy, rgz, ax, ay, az);
+    if (USE_MAG && magReady && haveMag) filter.updateMag(rgx, rgy, rgz, ax, ay, az, magX, magY, magZ);
+    else                                filter.update(rgx, rgy, rgz, ax, ay, az);
 
     sampleCount++; hzCount++;
 
