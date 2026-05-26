@@ -102,6 +102,11 @@ export function createScene(container) {
   const lander = createLander(renderer);
   lander.position.y = 1.2; scene.add(lander);
   const targetQ = new THREE.Quaternion();
+  // IMU frame is Z-up (Madgwick gravity reference); Three.js is Y-up. Convert by
+  // conjugation: q_display = FRAME * q_imu * FRAME^-1, FRAME = -90deg about X.
+  // Keeps identity upright while mapping sensor yaw to the lander's vertical.
+  const FRAME = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+  const FRAME_INV = FRAME.clone().invert();
 
   // ---- Post-processing ----
   const composer = new THREE.EffectComposer(renderer);
@@ -120,7 +125,10 @@ export function createScene(container) {
 
   return {
     renderer, scene, camera,
-    setOrientation(q) { targetQ.set(q.x, q.y, q.z, q.w); },
+    setOrientation(q) {
+      targetQ.set(q.x, q.y, q.z, q.w);
+      targetQ.premultiply(FRAME).multiply(FRAME_INV);
+    },
     render(dt) {
       controls.update();
       lander.quaternion.slerp(targetQ, 1 - Math.exp(-14 * dt));
