@@ -1,0 +1,55 @@
+name: Build firmware
+
+# Builds the Nano 33 BLE firmware on an x86 runner, where the mbed core's
+# required GCC 7.2 toolchain is available. arm64 hosts (Asahi Linux) cannot
+# produce a bootable image — see the note in platformio.ini. Download the
+# firmware-nano33ble artifact and flash it locally with bossac/pio.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'platformio.ini'
+      - '.github/workflows/build-firmware.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest   # x86_64 → platform-default GCC 7.2 toolchain
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        run: pio run -e nano33ble
+
+      - name: Report size and toolchain
+        run: |
+          echo "Toolchain used:"
+          ls ~/.platformio/packages/ | grep -i toolchain || true
+          ls -l .pio/build/nano33ble/firmware.*
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-nano33ble
+          path: |
+            .pio/build/nano33ble/firmware.bin
+            .pio/build/nano33ble/firmware.hex
+            .pio/build/nano33ble/firmware.elf
+          if-no-files-found: error
+          retention-days: 30
