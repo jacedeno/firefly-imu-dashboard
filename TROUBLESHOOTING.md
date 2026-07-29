@@ -127,6 +127,33 @@ intermittent) or a **wedged host USB controller** after many re-enumerations.
 4. Once any `/dev/ttyACM*` shows on double-tap, use the watcher above to flash the
    CI `firmware.bin`.
 
+## Plan B: replacement MCU if the board is actually dead (researched 2026-07-29)
+
+The 2026-06-01 evidence says the board is likely alive (green power LED on, amber
+LED breathing in bootloader) and the blocker is USB enumeration — retry the
+"To try next" list above first. If the board is confirmed dead, these are the
+replacement options **with US stock** (Seeed's own store ships from China, which
+was ruled out):
+
+| Board | ~Price | IMU | Verdict |
+|---|---|---|---|
+| **Adafruit Feather nRF52840 Sense** ([#4516](https://www.adafruit.com/product/4516)) | $32 | **9-DOF onboard**: LSM6DS3TR-C (accel+gyro) + LIS3MDL (mag) | **Recommended** — only US-stock board that replicates the full project (absolute yaw) on one PCB. Adafruit (NY), DigiKey, Mouser, Jameco. |
+| Arduino Nano 33 BLE Sense Rev2 | $40–45 | BMI270 + BMM150 (9-DOF) | Drop-in: only swap the IMU lib to `Arduino_BMI270_BMM150` (already planned in CLAUDE.md). But inherits the mbed/GCC 7.2 toolchain pain — keeps the CI-build requirement. DigiKey/Mouser/Amazon US. |
+| Seeed XIAO nRF52840 Sense ([Amazon US](https://www.amazon.com/Seeed-Studio-XIAO-nRF52840-Sense/dp/B09T94SZ8K)) | $17 | LSM6DS3TR-C (6-axis only, **no magnetometer**) | Cheapest, Prime stock — but 6-DOF only (yaw drifts; `sensor_fusion.h` fallback `update()`). Full 9-DOF needs an external mag module. |
+
+### Porting notes (Feather nRF52840 Sense)
+
+- Same nRF52840 SoC → BLE GATT notify design and the Web Bluetooth dashboard are
+  unchanged (device name aside).
+- Uses the **Adafruit nRF52 core (non-mbed)**, which builds with modern GCC →
+  should restore **local builds on the Asahi arm64 machine** (the GCC 7.2 root
+  cause above is mbed-core-specific). Trade-off: BLE stack is **Bluefruit**, not
+  ArduinoBLE — the GATT service/characteristic code in `src/main.cpp` needs a
+  straightforward port.
+- IMU libs: `Adafruit_LSM6DS` (accel/gyro) + `Adafruit_LIS3MDL` (mag); feed the
+  real ODR as the Madgwick `sampleFreq`. Packing/notify (10× int16, 20 B) is
+  unchanged.
+
 ## Environment notes
 
 - Host: MacBook Air **M1**, **Fedora Asahi** (`aarch64`, kernel `…asahi…+16k`).
