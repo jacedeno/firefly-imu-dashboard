@@ -88,7 +88,8 @@ Click **Connect**, choose `Firefly-BlueGhost-IMU`, then move the board.
   published via GitHub Pages.
 - `platformio.ini` — board + library config.
 - `tools/make-offline-bundle.sh` — builds a self-contained copy of the dashboard (vendors Three.js
-  and the webfonts) for demos without reliable internet.
+  and the webfonts, and writes a `start-demo.sh` launcher) for demos without reliable internet.
+  The generated bundle is a build artifact and is intentionally not committed.
 - `PLAN.md` — the full implementation plan.
 - `DEMO.md` — runbook for presenting from another Fedora laptop (Chrome flag, BLE checks,
   offline bundle, live-failure table).

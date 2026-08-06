@@ -136,13 +136,30 @@ renders. Build a fully self-contained copy **while you still have good internet*
 ./tools/make-offline-bundle.sh ~/blueghost-demo
 ```
 
-Then, at the venue:
+The bundle contains a `start-demo.sh` launcher, so at the venue it is one command:
+
+```bash
+cd ~/blueghost-demo && ./start-demo.sh        # PORT=9000 ./start-demo.sh to change port
+```
+
+It serves the folder, opens Chrome with the flag, and stops the server when
+Chrome closes. It also **refuses to run if Chrome is already open**, because the
+flag is only read at startup — otherwise you get a tab with no Web Bluetooth and
+a Connect button that silently does nothing.
+
+By hand, if you prefer:
 
 ```bash
 cd ~/blueghost-demo && python3 -m http.server 8765
-# quit Chrome, then:
+# quit Chrome completely (pgrep -c chrome must be 0), then:
 google-chrome --enable-experimental-web-platform-features http://localhost:8765/
 ```
+
+**The bundle is deliberately not committed.** It is ~1.2 MB of Three.js and
+webfonts pulled from CDNs — a build artifact. Regenerate it from the repo instead
+of versioning it; the generator is `tools/make-offline-bundle.sh`. To carry it to
+another machine, `tar czf blueghost-demo.tar.gz blueghost-demo` (~595 KB) and copy
+that; tar preserves the launcher's execute bit.
 
 **`http://localhost` is a secure context**, so Web Bluetooth works over plain
 HTTP there — no certificate, no HTTPS, no internet required.

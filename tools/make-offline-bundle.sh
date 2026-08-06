@@ -111,9 +111,45 @@ if remaining:
         print("      ", r)
 PY
 
+echo "==> writing start-demo.sh launcher"
+cat > "$DEST/start-demo.sh" <<'LAUNCHER'
+#!/usr/bin/env bash
+# Blue Ghost IMU - offline demo launcher.
+# Serves this folder on localhost and opens Chrome with Web Bluetooth enabled.
+# No internet needed: http://localhost is a secure context, so Web Bluetooth
+# works over plain HTTP and every asset is vendored inside this folder.
+#
+#   ./start-demo.sh              # port 8765
+#   PORT=9000 ./start-demo.sh    # if that port is taken
+set -euo pipefail
+PORT="${PORT:-8765}"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The flag is only read at startup: if Chrome is already running this would
+# silently open a tab in the existing process and Web Bluetooth would be absent,
+# which looks exactly like the Connect button doing nothing.
+if pgrep -x chrome >/dev/null 2>&1; then
+  echo "Chrome is already running - the flag would be IGNORED."
+  echo "Quit Chrome completely (pgrep -c chrome must be 0), then run this again."
+  exit 1
+fi
+
+echo "Serving $DIR on http://localhost:$PORT"
+python3 -m http.server "$PORT" --directory "$DIR" >/dev/null 2>&1 &
+SERVER=$!
+trap 'kill $SERVER 2>/dev/null || true' EXIT
+sleep 1
+
+google-chrome --enable-experimental-web-platform-features "http://localhost:$PORT/"
+
+echo "Chrome closed; stopping the server."
+LAUNCHER
+chmod +x "$DEST/start-demo.sh"
+
 echo
 echo "Offline bundle ready: $DEST"
 echo
-echo "  cd $DEST && python3 -m http.server 8765"
-echo "  # quit Chrome completely first (pgrep -c chrome), then:"
-echo "  google-chrome --enable-experimental-web-platform-features http://localhost:8765/"
+echo "  cd $DEST && ./start-demo.sh"
+echo
+echo "  (or by hand: python3 -m http.server 8765, quit Chrome, then"
+echo "   google-chrome --enable-experimental-web-platform-features http://localhost:8765/)"
