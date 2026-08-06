@@ -1,7 +1,7 @@
 // Firefly Blue Ghost IMU — Arduino Nano 33 BLE (LSM9DS1) firmware.
-// Reads the onboard 9-axis IMU, runs 9-DOF Madgwick fusion (with a running
-// hard-iron magnetometer calibration), and streams the orientation over BLE
-// to the Web Bluetooth dashboard.
+// Reads the onboard 9-axis IMU, runs 9-DOF Mahony fusion (fixed hard/soft-iron
+// magnetometer constants, see below) and streams the orientation over BLE to
+// the Web Bluetooth dashboard.
 //
 // BLE characteristic payload = 10x int16 little-endian (20 bytes), matching
 // docs/js/ble.js:
@@ -20,12 +20,18 @@ static const float Q_SCALE = 30000.0f, A_SCALE = 100.0f, G_SCALE = 1000.0f;
 static const float DEG2RAD = 0.01745329252f;
 static const float G_MS2   = 9.80665f;
 
-// ---- Magnetometer calibration (from on-device tumble calibration, 2026-05-25).
-// LSM9DS1 mag axes vs accel/gyro frame: X aligned, Y & Z negated (180deg about
-// X). Verified by min-variance of accel.mag over a full-sphere tumble (dip ~55deg).
+// ---- Magnetometer calibration (re-derived 2026-08-05 by least-squares sphere
+// fit over 3016 tumble samples: centre (-4.5, +60.3, -0.2) uT, radius 39.1 uT,
+// mean residual 0.80 uT = 2.0% of radius).
+// The previous constants (offset Y = +32.1) were 28 uT off on the dominant axis,
+// which is what made the heading unrepeatable: returning the board to a marked
+// spot landed 50 deg away.
+// Soft-iron left at unity on purpose - the Y axis was under-covered in the
+// tumble, so a fitted scale there would be worse than no correction at all.
+// LSM9DS1 mag axes vs accel/gyro frame: X aligned, Y & Z negated (180deg about X).
 static const float MAG_FX = 1.0f, MAG_FY = -1.0f, MAG_FZ = -1.0f;   // axis sign map
-static const float MAG_OFF[3] = { -5.7f, 32.1f, -4.5f };            // hard-iron (uT)
-static const float MAG_SCL[3] = { 1.053f, 1.030f, 0.927f };         // soft-iron
+static const float MAG_OFF[3] = { -4.5f, 60.3f, -0.2f };            // hard-iron (uT)
+static const float MAG_SCL[3] = { 1.0f, 1.0f, 1.0f };               // soft-iron: unity
 static const bool  USE_MAG = true;                                  // 9-DOF enabled
 
 // Mahony AHRS: Kp=responsiveness, Ki=online gyro-bias estimation (kills yaw drift
@@ -40,6 +46,9 @@ float magX = 0, magY = 0, magZ = 0;
 bool  haveMag = false, magReady = false;
 
 uint32_t lastNotify = 0, lastDbg = 0, sampleCount = 0, hzCount = 0, hzTime = 0;
+uint32_t lastFuseUs = 0;   // for the measured per-iteration dt
+float magNorm = 0, magRawNorm = 0;   // field-strength diagnostics
+uint32_t lastMagOkMs = 0;
 
 static int16_t clamp16(float v) {
   if (v > 32767.0f) return 32767;
@@ -49,16 +58,29 @@ static int16_t clamp16(float v) {
 
 void calibrateGyro() {
   Serial.println("[cal] keep board STILL — measuring gyro bias...");
-  const int N = 200;
-  double sx = 0, sy = 0, sz = 0; int got = 0;
+
+  // Let the sensor settle and throw away the first samples: reading immediately
+  // after IMU.begin() bakes power-up transients into the bias permanently.
+  delay(300);
+  for (int i = 0; i < 30; i++) {
+    if (IMU.gyroscopeAvailable()) { float x, y, z; IMU.readGyroscope(x, y, z); }
+  }
+
+  const int N = 300;
+  const float MAX_DPS = 2.0f;   // reject samples taken while the board moved
+  double sx = 0, sy = 0, sz = 0; int got = 0, rejected = 0;
   uint32_t t0 = millis();
-  while (got < N && millis() - t0 < 4000) {
+  while (got < N && millis() - t0 < 5000) {
     if (IMU.gyroscopeAvailable()) {
       float x, y, z; IMU.readGyroscope(x, y, z);
+      if (fabsf(x) > MAX_DPS || fabsf(y) > MAX_DPS || fabsf(z) > MAX_DPS) { rejected++; continue; }
       sx += x; sy += y; sz += z; got++;
     }
   }
-  if (got > 0) { gbx = sx / got; gby = sy / got; gbz = sz / got; }
+  if (got >= N / 3) { gbx = sx / got; gby = sy / got; gbz = sz / got; }
+  else Serial.println("[cal] WARNING: too few still samples — bias left at 0, keep it still and reset");
+  Serial.print("[cal] samples "); Serial.print(got);
+  Serial.print(", rejected "); Serial.println(rejected);
   Serial.print("[cal] gyro bias (dps): ");
   Serial.print(gbx, 3); Serial.print(", "); Serial.print(gby, 3); Serial.print(", "); Serial.println(gbz, 3);
 }
@@ -108,10 +130,28 @@ void loop() {
   // Magnetometer (~20 Hz): fixed hard/soft-iron + axis-sign map.
   if (IMU.magneticFieldAvailable()) {
     float rx, ry, rz; IMU.readMagneticField(rx, ry, rz);
-    magX = (rx - MAG_OFF[0]) * MAG_SCL[0] * MAG_FX;
-    magY = (ry - MAG_OFF[1]) * MAG_SCL[1] * MAG_FY;
-    magZ = (rz - MAG_OFF[2]) * MAG_SCL[2] * MAG_FZ;
-    haveMag = true; magReady = true;
+    float cx = (rx - MAG_OFF[0]) * MAG_SCL[0] * MAG_FX;
+    float cy = (ry - MAG_OFF[1]) * MAG_SCL[1] * MAG_FY;
+    float cz = (rz - MAG_OFF[2]) * MAG_SCL[2] * MAG_FZ;
+    // Reject implausible field strength. Earth's field is ~25-65 uT; anything
+    // outside that is a nearby magnet, a screw or a laptop, and feeding it in
+    // would swing the heading reference. Without this the magnetometer fails
+    // silently and yaw simply ends up somewhere wrong.
+    float mn = sqrtf(cx*cx + cy*cy + cz*cz);
+    magNorm = mn;
+    magRawNorm = sqrtf(rx*rx + ry*ry + rz*rz);
+    if (mn > 20.0f && mn < 80.0f) {
+      magX = cx; magY = cy; magZ = cz;
+      haveMag = true; magReady = true;
+      lastMagOkMs = millis();
+    } else {
+      magReady = false;
+      // Do NOT keep feeding the last good vector: frozen in the body frame it
+      // rotates with the board and actively drags the heading. After a short
+      // grace period drop to 6-DOF, where yaw free-runs on the gyro instead of
+      // being pulled somewhere wrong.
+      if (millis() - lastMagOkMs > 1000) haveMag = false;
+    }
   }
 
   // Accel + gyro (~119 Hz): run fusion.
@@ -122,6 +162,13 @@ void loop() {
     float rgx = (gx - gbx) * DEG2RAD;
     float rgy = (gy - gby) * DEG2RAD;
     float rgz = (gz - gbz) * DEG2RAD;
+
+    // Measure the real timestep. The nominal 119 Hz is a library constant, not
+    // a measurement; the loop actually runs 107-118 Hz, and integrating with a
+    // dt ~5% short makes every rotation come up short.
+    uint32_t nowUs = micros();
+    if (lastFuseUs != 0) filter.setDt((nowUs - lastFuseUs) * 1e-6f);
+    lastFuseUs = nowUs;
 
     if (USE_MAG && haveMag) filter.updateMag(rgx, rgy, rgz, ax, ay, az, magX, magY, magZ);
     else                    filter.update(rgx, rgy, rgz, ax, ay, az);
@@ -153,7 +200,12 @@ void loop() {
     Serial.print("[run] fuse "); Serial.print(hz, 0); Serial.print(" Hz | q=");
     Serial.print(filter.w(), 3); Serial.print(","); Serial.print(filter.x(), 3); Serial.print(",");
     Serial.print(filter.y(), 3); Serial.print(","); Serial.print(filter.z(), 3);
-    Serial.print(" | mag "); Serial.print(magReady ? "READY" : "calibrating(move it)");
+    // |m| is the fastest way to spot a bad magnetic environment: raw should be
+    // 25-65 uT and cal should sit near the calibration radius (~39 uT). A raw
+    // reading of ~157 uT is what exposed a magnet under the desk.
+    Serial.print(" | |m| raw "); Serial.print(magRawNorm, 1);
+    Serial.print(" cal "); Serial.print(magNorm, 1);
+    Serial.print(" | mag "); Serial.print(magReady ? "READY" : "REJECTED");
     Serial.print(" | ble "); Serial.println(BLE.connected() ? "connected" : "advertising");
   }
 }
