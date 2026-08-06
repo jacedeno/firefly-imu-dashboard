@@ -266,6 +266,105 @@ bluetoothctl disconnect 03:CD:48:76:F7:2D   # board MAC
 Serial then returns to `ble advertising`. A leftover dashboard tab (or a stray
 `bleak` script) will also hold the link.
 
+## Heading is not repeatable — magnetometer investigation (2026-08-05)
+
+**Symptom:** rotate the board and bring it back to a marked spot, and the heading
+lands tens of degrees away. Numbers also appear to "hunt" for a resting place
+after every movement.
+
+**Partly fixed, not solved.** Return error went from **+50.5° to −28.5°**. What
+follows is the measured evidence so none of it has to be re-derived.
+
+### First: measure before theorising
+
+Serial works at the same time as BLE, so the board can be logged while the
+dashboard is connected. Stationary on the desk, the yaw readout is far steadier
+than it looks:
+
+| | value |
+|---|---|
+| yaw drift, stationary | −0.24 °/min |
+| yaw peak-to-peak over 91 s | 0.47° |
+| real fusion rate | 107–118 Hz (mean 113.4) |
+
+So the "numbers keep changing" complaint at rest is ±0.25° — sensor noise
+flickering the last displayed decimal, not drift.
+
+### Root cause: a magnet in the desk, not the code
+
+The decisive measurement was the raw field strength. Earth's field is 25–65 µT:
+
+| where | \|m\| raw |
+|---|---|
+| the board's usual spot on the desk | **157 µT**, rock stable |
+| anywhere else in the room | 25–65 µT (normal) |
+
+That spot has a local source roughly tripling Earth's field, almost all on the Y
+axis (+136 µT). **A magnet fixed in the world frame cannot be calibrated out** —
+hard/soft-iron calibration only corrects sources that move *with* the board. The
+heading was being referenced to a corrupted field, and putting the board back on
+its mark put it back in the anomaly.
+
+This is why the firmware now prints `|m| raw` and `cal` on the `[run]` line. It
+is the fastest possible check for a bad magnetic environment.
+
+### Second problem: the stored calibration was 28 µT wrong
+
+Re-derived on 2026-08-05 in a clean spot by least-squares sphere fit over 3016
+tumble samples:
+
+| | old (2026-05-25) | new |
+|---|---|---|
+| hard-iron X | −5.7 | −4.5 |
+| **hard-iron Y** | **+32.1** | **+60.3** |
+| hard-iron Z | −4.5 | −0.2 |
+| soft-iron | 1.053, 1.030, 0.927 | 1.0, 1.0, 1.0 |
+
+Fit quality: radius 39.1 µT (plausible), mean residual 0.80 µT = 2.0% of radius.
+Soft-iron deliberately left at unity — the Y axis was under-covered in the
+tumble, so a fitted scale there would be worse than no correction.
+
+### Other firmware defects fixed at the same time
+
+- **Fixed `dt`.** The filter integrated at a hardcoded 119 Hz while the loop
+  really runs 107–118 Hz — a systematic ~5% gyro under-integration, so every
+  rotation fell short. Now measured per iteration with `micros()`.
+  `IMU.accelerationSampleRate()` returns a library **constant**, not a
+  measurement, so it cannot be used for this.
+- **Unbounded Mahony integral.** `_ibx/_iby/_ibz` had no clamp and no leak with
+  `twoKi = 0.16`; transients wound it up and it took tens of seconds to unwind.
+  Now clamped to ±0.05 rad/s (~2.9 dps), the physical scale of real gyro bias.
+- **No accelerometer validity gate.** Any nonzero vector was taken as gravity, so
+  hand acceleration during a move corrupted the tilt reference — which in 9-DOF
+  couples straight into heading. Now requires 0.75–1.25 g.
+- **Frozen magnetometer vector.** When the field is rejected, the code used to
+  keep feeding the last good vector; frozen in the body frame it rotates with the
+  board and actively drags the heading. Now falls back to 6-DOF after 1 s.
+- **Gyro bias calibration** now settles 300 ms, discards 30 warm-up samples,
+  takes 300 samples and rejects any above 2 dps, and warns instead of silently
+  using a bad average.
+
+Cost: stationary noise went from 0.47° to 0.80° peak-to-peak (the integral clamp
+absorbs less), with drift unchanged at −0.21 °/min. Accepted.
+
+### Still open — next suspect is the axis sign map
+
+`MAG_FX/FY/FZ = (+1, −1, −1)` was derived in May **using the hard-iron constants
+now known to be 28 µT wrong**, so the derivation itself is suspect. A wrong sign
+map puts the magnetic vector in a different frame from accel/gyro, producing a
+heading error that varies with attitude — exactly the remaining symptom.
+
+To re-derive: log accel and mag together through a full tumble, then pick the
+combination minimising the variance of `accel · mag` (that dot product is
+invariant, since both are world-fixed vectors). Needs good coverage on **all
+three** axes — X and Z reached ~80 µT of range easily, Y only 28 µT, and Y
+coverage requires standing the board on its long edge.
+
+**Fallback if the magnetometer stays unreliable:** set `USE_MAG = false` for
+6-DOF. Pitch and roll stay exact and rock steady; yaw free-runs on the gyro and
+is no longer an absolute heading. For a demo where the board is tilted by hand
+that often reads *better* — nothing wanders.
+
 ## Plan B: replacement MCU — NOT NEEDED (researched 2026-07-29)
 
 > **Superseded 2026-08-05.** The board is confirmed **fully functional** and the

@@ -93,6 +93,31 @@ Do not let demo day be the first time this laptop talks to the board.
   at boot, decaying to ~0.1 °/s. Pitch and roll are correct immediately.
   **Power the board a minute before you present** and it will be settled.
 
+### Keep the board away from magnets
+
+Heading comes from the magnetometer, and a magnet near the board wrecks it. On
+2026-08-05 one spot on the dev desk read **157 µT** where Earth's field is 25–65 —
+enough to make the heading land tens of degrees off. Speakers, magnetic phone
+mounts, laptop lids, hard drives and metal table frames all do this, and **no
+calibration can correct a magnet that stays in the room** rather than on the board.
+
+Check the venue table before presenting — plug in USB and watch the `[run]` line:
+
+```bash
+python3 -c "
+import serial,glob,time
+p=sorted(glob.glob('/dev/ttyACM*'))[0]
+s=serial.Serial(p,115200,timeout=1); t=time.time()+8
+while time.time()<t:
+    l=s.readline()
+    if l: print(l.decode(errors='replace').rstrip())
+"
+# |m| raw should read 25-65. Much higher = magnet nearby, move the board.
+```
+
+Pitch and roll are unaffected by magnetic fields — only heading is. If the venue
+is magnetically dirty, demo tilt and roll and don't lean on the heading number.
+
 ### Presenter's tip
 
 There is a **"Run in demo mode"** button next to Connect. It animates the lander
