@@ -1,7 +1,7 @@
 // Firefly Blue Ghost IMU — Arduino Nano 33 BLE (LSM9DS1) firmware.
-// Reads the onboard 9-axis IMU, runs 9-DOF Mahony fusion (fixed hard/soft-iron
-// magnetometer constants, see below) and streams the orientation over BLE to
-// the Web Bluetooth dashboard.
+// Reads the onboard 9-axis IMU, runs Mahony fusion and streams the orientation
+// over BLE to the Web Bluetooth dashboard. Currently 6-DOF (USE_MAG=false):
+// pitch/roll are absolute, yaw is relative and drifts slowly. See USE_MAG.
 //
 // BLE characteristic payload = 10x int16 little-endian (20 bytes), matching
 // docs/js/ble.js:
@@ -32,7 +32,16 @@ static const float G_MS2   = 9.80665f;
 static const float MAG_FX = 1.0f, MAG_FY = -1.0f, MAG_FZ = -1.0f;   // axis sign map
 static const float MAG_OFF[3] = { -4.5f, 60.3f, -0.2f };            // hard-iron (uT)
 static const float MAG_SCL[3] = { 1.0f, 1.0f, 1.0f };               // soft-iron: unity
-static const bool  USE_MAG = true;                                  // 9-DOF enabled
+// 6-DOF is the default. Measured 2026-08-05, rotate-the-board-and-put-it-back
+// against a physical mark:
+//   9-DOF, old calibration : +50.5 deg error
+//   9-DOF, new calibration : -28.5 deg error, >46 s to settle
+//   6-DOF                  :  +3.4 deg error,   0 s to settle
+// Yaw is then relative rather than magnetic and drifts ~0.9 deg/min, which is
+// a far better trade than a heading that lands 28 deg out and hunts for a
+// minute. Set true to go back to 9-DOF once the mag axis sign map is re-derived
+// (see TROUBLESHOOTING.md).
+static const bool  USE_MAG = false;                                 // false = 6-DOF
 
 // Mahony AHRS: Kp=responsiveness, Ki=online gyro-bias estimation (kills yaw drift
 // without a perfect boot calibration). Same update()/updateMag()/getters as before.
