@@ -1,8 +1,8 @@
 // "Lunar Mission Control" 3D scene: Blue Ghost lander on the Moon, Earth +
-// starfield, cinematic light, soft contact shadow, subtle UnrealBloom, and an
-// auto-orbiting OrbitControls camera. All effects scale via setQuality().
+// starfield, cinematic light, soft contact shadow, subtle UnrealBloom, and a
+// user-controlled OrbitControls camera. All effects scale via setQuality().
 /* global THREE */
-import { createLander } from './lander.js';
+import { createLander, PAD_LOCAL } from './lander.js';
 
 function shadowSprite() {
   const c = document.createElement('canvas'); c.width = c.height = 256;
@@ -36,10 +36,10 @@ export function createScene(container) {
   controls.enableDamping = true; controls.dampingFactor = 0.06;
   controls.enablePan = false; controls.minDistance = 3.2; controls.maxDistance = 22;
   controls.maxPolarAngle = Math.PI * 0.92;
-  controls.autoRotate = true; controls.autoRotateSpeed = 0.55;
-  let resumeTimer = null;
-  controls.addEventListener('start', () => { controls.autoRotate = false; clearTimeout(resumeTimer); });
-  controls.addEventListener('end', () => { resumeTimer = setTimeout(() => (controls.autoRotate = true), 4000); });
+  // Auto-orbit stays OFF. This demo's whole claim is "the model moves because
+  // the board moves"; a drifting camera makes a stationary board look like it
+  // is rotating and destroys that. Manual orbit/zoom remain available.
+  controls.autoRotate = false;
 
   // ---- Lights ----
   const sun = new THREE.DirectionalLight(0xfff2d6, 2.7);
