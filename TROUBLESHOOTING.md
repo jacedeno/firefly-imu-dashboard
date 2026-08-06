@@ -209,7 +209,10 @@ breathing) → reflash a known-good image.
 ## Dashboard: Web Bluetooth needs a flag on Chrome for Linux
 
 **Symptom:** clicking **"Connect device"** does nothing — the Chrome device
-chooser never opens. Diagnosed 2026-08-05 on `C2-B5`.
+chooser never opens. Diagnosed 2026-08-05 on `C2-B5`, and hit again the same day
+on the **Fedora 44 laptop** (ThinkPad T470, Chrome 151, Wayland). Expect this on
+**every** fresh Linux host — it is the default state of Chrome on Linux, not a
+per-machine quirk.
 
 **Cause:** Chrome on **Linux** does not enable Web Bluetooth by default.
 `navigator.bluetooth` is simply **absent**, so `ble.js`'s `bleSupported()`
@@ -241,6 +244,48 @@ Or make it permanent for all browsing via
 `chrome://flags/#enable-experimental-web-platform-features` → **Relaunch**. Note
 this enables *all* experimental web platform features, so the per-launch flag is
 the tidier option for a daily-driver browser.
+
+### Gotcha: an already-running Chrome swallows the flag
+
+**This is how the fix above silently fails.** If any Chrome is already running on
+the same profile, `google-chrome --enable-experimental-web-platform-features
+<url>` does **not** start a new browser — it hands the URL to the existing
+process and the flag is **discarded**. The tab opens, Web Bluetooth is still
+absent, and it looks like the documented fix does not work.
+
+Easy to trip over because the holdout is often invisible: on the Fedora laptop it
+was a **PWA app window** (`chrome --app-id=…`), not an obvious browser window.
+`chrome://flags` → **Relaunch** has the same trap — it only re-execs what it owns,
+so a stray PWA window keeps the old flagless process alive.
+
+Check before blaming the flag:
+
+```bash
+pgrep -af "/opt/google/chrome/chrome " | grep -v -- "--type="   # any live instance?
+python3 -c "import json;print(json.load(open('$HOME/.config/google-chrome/Local State'))['browser'].get('enabled_labs_experiments'))"
+```
+
+An empty/missing `enabled_labs_experiments` means the flag is **not** persisted in
+that profile. Do not hand-edit `Local State` while Chrome is running — it rewrites
+the file on exit and the edit is lost.
+
+Two ways out:
+
+- **Quit Chrome completely** (including PWA windows), then relaunch with the flag,
+  or toggle it in `chrome://flags` and relaunch.
+- **Side-step the running instance** with a throwaway profile — a genuinely
+  separate process, leaves the daily-driver session untouched. This is what to use
+  for a quick demo:
+
+```bash
+google-chrome --enable-experimental-web-platform-features \
+  --user-data-dir=/tmp/chrome-ble --no-first-run --no-default-browser-check \
+  https://jacedeno.github.io/firefly-imu-dashboard/
+```
+
+Confirmed on the Fedora laptop 2026-08-05: the throwaway-profile window connected
+to the board while the user's normal Chrome, same machine and same moment, still
+would not open the chooser.
 
 ### Verified end to end (2026-08-05)
 
