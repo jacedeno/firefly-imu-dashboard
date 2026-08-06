@@ -100,13 +100,28 @@ export function createScene(container) {
 
   // ---- Lander ----
   const lander = createLander(renderer);
-  lander.position.y = 1.2; scene.add(lander);
+  scene.add(lander);
   const targetQ = new THREE.Quaternion();
-  // IMU frame is Z-up (Madgwick gravity reference); Three.js is Y-up. Convert by
+  // IMU frame is Z-up (gravity reference); Three.js is Y-up. Convert by
   // conjugation: q_display = FRAME * q_imu * FRAME^-1, FRAME = -90deg about X.
   // Keeps identity upright while mapping sensor yaw to the lander's vertical.
   const FRAME = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
   const FRAME_INV = FRAME.clone().invert();
+
+  // Seat the lander on the surface. The group rotates about the body center, so
+  // a fixed lift only works upright — any tilt drives the downhill pad through
+  // the ground. Re-derive the lift each frame from the lowest contact point.
+  const padVecs = PAD_LOCAL.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+  const scratch = new THREE.Vector3();
+  function seatOnGround() {
+    let lowest = Infinity;
+    for (const p of padVecs) {
+      const y = scratch.copy(p).applyQuaternion(lander.quaternion).y;
+      if (y < lowest) lowest = y;
+    }
+    lander.position.y = -lowest;
+  }
+  seatOnGround();
 
   // ---- Post-processing ----
   const composer = new THREE.EffectComposer(renderer);
@@ -132,6 +147,7 @@ export function createScene(container) {
     render(dt) {
       controls.update();
       lander.quaternion.slerp(targetQ, 1 - Math.exp(-14 * dt));
+      seatOnGround();
       earth.rotation.y += dt * 0.03;
       if (bloomOn) composer.render(); else renderer.render(scene, camera);
     },

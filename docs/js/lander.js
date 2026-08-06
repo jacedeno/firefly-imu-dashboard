@@ -1,7 +1,20 @@
 // Procedural Blue Ghost lunar lander. Returns a THREE.Group whose local
-// origin is the body center (so the IMU quaternion rotates about it). Foot
-// pads sit at local y = -1.2; the scene lifts the group so pads rest on y=0.
+// origin is the body center (so the IMU quaternion rotates about it). The
+// scene lifts and levels the group so the pads rest on y=0 — see PAD_LOCAL.
 /* global THREE */
+
+// Landing-pad geometry. Exported so the scene can seat the lander on the
+// surface without re-deriving these numbers: a hardcoded lift of 1.2 used to
+// ignore the pad disc's own thickness and buried every foot by 35 mm.
+const PAD_RADIUS = 1.85;   // horizontal distance from body axis to pad center
+const PAD_Y = -1.2;        // pad center height in local space
+const PAD_HALF_H = 0.035;  // half of the 0.07-tall footpad cylinder
+
+// The four contact points, at the underside of each pad.
+export const PAD_LOCAL = [0, 1, 2, 3].map((i) => {
+  const a = Math.PI / 4 + i * Math.PI / 2;
+  return { x: Math.cos(a) * PAD_RADIUS, y: PAD_Y - PAD_HALF_H, z: Math.sin(a) * PAD_RADIUS };
+});
 
 function strut(from, to, r, mat) {
   const dir = new THREE.Vector3().subVectors(to, from);
@@ -56,17 +69,17 @@ export function createLander(renderer) {
   const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.32, 0.34, 12), metal);
   nozzle.position.y = -0.62; nozzle.castShadow = true; g.add(nozzle);
 
-  // Four landing legs + footpads (local pads at y = -1.2).
+  // Four landing legs + footpads (pad centers at local y = PAD_Y).
   const legGroup = new THREE.Group();
   for (let i = 0; i < 4; i++) {
     const a = Math.PI / 4 + i * Math.PI / 2;
     const dx = Math.cos(a), dz = Math.sin(a);
     const hip = new THREE.Vector3(dx * 0.95, -0.25, dz * 0.95);
-    const pad = new THREE.Vector3(dx * 1.85, -1.2, dz * 1.85);
+    const pad = new THREE.Vector3(dx * PAD_RADIUS, PAD_Y, dz * PAD_RADIUS);
     legGroup.add(strut(hip, pad, 0.05, metal));
     // small secondary brace
     legGroup.add(strut(new THREE.Vector3(dx * 0.6, 0.1, dz * 0.6), new THREE.Vector3(dx * 1.4, -0.8, dz * 1.4), 0.025, metal));
-    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.07, 14), black);
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, PAD_HALF_H * 2, 14), black);
     foot.position.copy(pad); foot.castShadow = true; foot.receiveShadow = true;
     legGroup.add(foot);
   }
