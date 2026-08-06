@@ -75,3 +75,11 @@ ser.close()
   fall back to 6-DOF (`update()`) — pitch/roll stay good, yaw drifts slowly.
 - **Quaternion convention**: Three.js uses `(x, y, z, w)` order — `quaternion.set(x, y, z, w)`.
 - Pick the IMU library to match the **board revision** (LSM9DS1 vs BMI270+BMM150).
+
+## Open design questions (decided, but revisitable)
+
+- **The lander rises as it tilts.** `seatOnGround()` in `docs/js/scene.js` keeps the lowest
+  footpad on `y=0`, which means the body lifts (1.235 level → ~1.80 at 45° roll). Jose accepted
+  this on 2026-08-05 and asked to keep it **unless the rise turns out to look wrong on screen**.
+  If he says so, switch to pivoting about the contact pad — the alternative is written out in
+  full in the comment above `seatOnGround()`, including why it needs re-centering.

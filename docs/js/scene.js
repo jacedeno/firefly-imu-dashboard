@@ -111,6 +111,23 @@ export function createScene(container) {
   // Seat the lander on the surface. The group rotates about the body center, so
   // a fixed lift only works upright — any tilt drives the downhill pad through
   // the ground. Re-derive the lift each frame from the lowest contact point.
+  //
+  // Trade-off, accepted on 2026-08-05: keeping the lowest pad on y=0 while
+  // rotating about the body center means the body RISES as it tilts (lift goes
+  // 1.235 level -> ~1.80 at 45 deg roll). Geometrically unavoidable here, and it
+  // reads like the lander rocking onto one leg.
+  //
+  // ALTERNATIVE if that rise ever looks wrong: pivot about the contact pad
+  // instead of lifting vertically. Pick the lowest pad, then translate so that
+  // pad stays fixed in world space across the rotation:
+  //
+  //   const before = padVecs[i].clone().applyQuaternion(prevQ);
+  //   const after  = padVecs[i].clone().applyQuaternion(lander.quaternion);
+  //   lander.position.add(before.sub(after));   // keeps the contact point still
+  //
+  // That removes the vertical bob but the body then translates horizontally, so
+  // the model drifts off-center and needs re-centering (or a camera that
+  // follows). Not worth it unless the rise is actually objectionable on screen.
   const padVecs = PAD_LOCAL.map((p) => new THREE.Vector3(p.x, p.y, p.z));
   const scratch = new THREE.Vector3();
   function seatOnGround() {
