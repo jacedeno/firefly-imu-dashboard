@@ -17,7 +17,7 @@ drop the board into a 3D-printed Blue Ghost shell.
 |--------------------------|----------|
 | $8 Amazon "MPU-9250" (often counterfeit / no working magnetometer) | **Onboard 9-axis IMU** on a brand-name Arduino board — no external sensor, no wiring |
 | ESP32-S3 SoftAP unstable / brownouts | **BLE** streaming — local, low-power, no WiFi AP, no web server on the device |
-| Yaw drift (6-DOF fusion) | **9-DOF fusion** using the magnetometer for absolute heading |
+| Yaw drift (6-DOF fusion) | 9-DOF fusion is implemented, but **6-DOF is the current default** — see the note below |
 
 ## Hardware
 
@@ -54,8 +54,12 @@ static app code (over HTTPS, which Web Bluetooth requires).
 pio run -e nano33ble                 # build
 pio run -e nano33ble -t upload       # flash the Nano
 ```
-First boot: run the **magnetometer calibration** (move the board in a figure-8 for ~15–20 s) so the
-9-DOF fusion has an absolute, drift-free heading. Calibration is stored in flash.
+> **Fusion mode: 6-DOF by default** (`USE_MAG = false` in `src/main.cpp`). Pitch and roll are
+> absolute and rock steady; **yaw is relative** — it starts at zero on boot and drifts ~0.9°/min.
+> 9-DOF with magnetometer heading is fully implemented and one flag away, but measured worse in
+> practice: returning the board to a marked spot landed 28° out and took over 40 s to settle,
+> versus 3.4° and no settling in 6-DOF. See TROUBLESHOOTING.md for the measurements and what is
+> still to fix.
 
 ### Dashboard
 Open the GitHub Pages URL in **Chrome or Edge** (desktop or Android — *not* iOS Safari):
@@ -78,7 +82,7 @@ Click **Connect**, choose `Firefly-BlueGhost-IMU`, then move the board.
   unless you build the self-contained bundle (`tools/make-offline-bundle.sh`).
 
 ## Project layout
-- `src/main.cpp` — firmware: IMU read, 9-DOF Mahony fusion, BLE GATT notify.
+- `src/main.cpp` — firmware: IMU read, Mahony fusion (6-DOF by default), BLE GATT notify.
 - `src/sensor_fusion.h` — AHRS filters (6-DOF + 9-DOF); `MahonyFilter` is the one in use.
 - `data/` → `docs/` — the dashboard (HTML/JS/CSS, Three.js Blue Ghost model, Web Bluetooth client),
   published via GitHub Pages.

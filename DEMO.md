@@ -182,6 +182,9 @@ reflashed with a different stack).
 
 ```bash
 # is the board advertising and free?
+# NOTE: this can come back empty even when the board is advertising fine —
+# bluetoothctl only prints devices whose state changed during the scan. The
+# authoritative check is the serial [run] line: "ble advertising" vs "connected".
 timeout 16 bluetoothctl --timeout 13 scan le | grep -i firefly
 
 # force-release a stale link (closing the browser does NOT always drop it —

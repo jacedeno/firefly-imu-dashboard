@@ -1,13 +1,14 @@
 # CLAUDE.md - Firefly IMU Dashboard
 
 ## Project Overview
-Arduino Nano 33 BLE Sense (nRF52840) + onboard 9-axis IMU → 9-DOF Mahony fusion → quaternion
+Arduino Nano 33 BLE Sense (nRF52840) + onboard 9-axis IMU → Mahony fusion (6-DOF default) → quaternion
 streamed over **BLE (GATT notify)** → **Web Bluetooth** dashboard (Three.js) themed as Firefly's
 **Blue Ghost** lunar lander. Hosted on GitHub Pages.
 
 > This is the reliable rebuild of the older ESP32-S3 + MPU-9250 + WiFi project (kept in a separate
 > repo). Key differences: onboard brand-name IMU (no external sensor/wiring), BLE instead of WiFi-AP,
-> 9-DOF fusion (magnetometer → absolute yaw), Firefly Blue Ghost theme.
+> 9-DOF fusion available (magnetometer → absolute yaw; currently disabled, see Important Notes),
+> Firefly Blue Ghost theme.
 
 ## Quick Reference
 - **Board**: `nano33ble` (platform `nordicnrf52`, framework `arduino` / mbed-based, nRF52840)
@@ -46,7 +47,8 @@ ser.close()
 ```
 
 ## Key Files
-- `src/main.cpp` — firmware: IMU init + read, gyro-bias calibration, 9-DOF Mahony fusion, magnetometer
+- `src/main.cpp` — firmware: IMU init + read, gyro-bias calibration, Mahony fusion (`USE_MAG`
+  picks 6-DOF/9-DOF), magnetometer
   calibration, BLE GATT service/characteristic, single `loop()` (BLE.poll + read + fuse + notify).
 - `src/sensor_fusion.h` — AHRS filters. **`MahonyFilter` is the one in use** (`main.cpp`);
   `MadgwickFilter` is kept but unused. Both expose `update()` = 6-DOF (fallback) and
@@ -57,7 +59,7 @@ ser.close()
 - `PLAN.md` — full implementation plan and rationale.
 
 ## Architecture
-- **Single core (nRF52840)**: one `loop()` reads the IMU at the sensor rate, runs 9-DOF Mahony fusion to
+- **Single core (nRF52840)**: one `loop()` reads the IMU at the sensor rate, runs Mahony fusion to
   get a quaternion, packs 10× int16, and updates the BLE characteristic (`notify`). `BLE.poll()` each loop.
 - **Transport**: BLE GATT notify → Web Bluetooth in the browser (Chrome/Edge desktop + Android).
 - **Frontend**: Three.js Blue Ghost lander rotated by the quaternion, resting on legs on a grid;
@@ -71,8 +73,9 @@ ser.close()
   `google-chrome --enable-experimental-web-platform-features` (or enable
   `chrome://flags/#enable-experimental-web-platform-features`). See TROUBLESHOOTING.md.
 - **No WiFi, no web server, no LittleFS, no captive portal** — all removed vs. the ESP32 version.
-- **9-DOF fusion needs magnetometer calibration** (hard/soft-iron). If calibration is troublesome,
-  fall back to 6-DOF (`update()`) — pitch/roll stay good, yaw drifts slowly.
+- **The firmware currently runs 6-DOF** (`USE_MAG = false`). Yaw is relative, not magnetic, and the
+  dashboard labels it **YAW REL** rather than HDG for that reason. 9-DOF measured worse on real
+  hardware (28° return error vs 3.4°); see TROUBLESHOOTING.md before switching it back.
 - **Quaternion convention**: Three.js uses `(x, y, z, w)` order — `quaternion.set(x, y, z, w)`.
 - Pick the IMU library to match the **board revision** (LSM9DS1 vs BMI270+BMM150).
 
