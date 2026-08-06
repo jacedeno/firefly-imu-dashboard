@@ -17,7 +17,7 @@ drop the board into a 3D-printed Blue Ghost shell.
 |--------------------------|----------|
 | $8 Amazon "MPU-9250" (often counterfeit / no working magnetometer) | **Onboard 9-axis IMU** on a brand-name Arduino board — no external sensor, no wiring |
 | ESP32-S3 SoftAP unstable / brownouts | **BLE** streaming — local, low-power, no WiFi AP, no web server on the device |
-| Yaw drift (6-DOF fusion) | **9-DOF Madgwick** using the magnetometer for absolute heading |
+| Yaw drift (6-DOF fusion) | **9-DOF fusion** using the magnetometer for absolute heading |
 
 ## Hardware
 
@@ -64,17 +64,31 @@ Open the GitHub Pages URL in **Chrome or Edge** (desktop or Android — *not* iO
 
 Click **Connect**, choose `Firefly-BlueGhost-IMU`, then move the board.
 
+> **On Linux, Chrome ships with Web Bluetooth disabled** — the Connect button will do nothing at
+> all. Launch it as
+> `google-chrome --enable-experimental-web-platform-features <url>` (quit Chrome fully first, or
+> the flag is ignored). Presenting from a laptop? See **[DEMO.md](DEMO.md)**.
+
 ## Limitations
 - **Web Bluetooth** works in Chrome/Edge on desktop and Android. **iOS Safari is not supported.**
-- Requires **HTTPS** (hence GitHub Pages) — Web Bluetooth only runs in a secure context.
+- **Chrome on Linux needs `--enable-experimental-web-platform-features`** (off by default).
+- Requires a **secure context** — HTTPS (hence GitHub Pages), or `http://localhost`, which counts
+  as secure and is how the offline demo bundle works.
+- The page loads **Three.js from unpkg.com** and fonts from Google Fonts, so it needs internet
+  unless you build the self-contained bundle (`tools/make-offline-bundle.sh`).
 
 ## Project layout
-- `src/main.cpp` — firmware: IMU read, 9-DOF Madgwick fusion, BLE GATT notify.
-- `src/sensor_fusion.h` — Madgwick filter (6-DOF + 9-DOF).
+- `src/main.cpp` — firmware: IMU read, 9-DOF Mahony fusion, BLE GATT notify.
+- `src/sensor_fusion.h` — AHRS filters (6-DOF + 9-DOF); `MahonyFilter` is the one in use.
 - `data/` → `docs/` — the dashboard (HTML/JS/CSS, Three.js Blue Ghost model, Web Bluetooth client),
   published via GitHub Pages.
 - `platformio.ini` — board + library config.
+- `tools/make-offline-bundle.sh` — builds a self-contained copy of the dashboard (vendors Three.js
+  and the webfonts) for demos without reliable internet.
 - `PLAN.md` — the full implementation plan.
+- `DEMO.md` — runbook for presenting from another Fedora laptop (Chrome flag, BLE checks,
+  offline bundle, live-failure table).
+- `TROUBLESHOOTING.md` — build/flash bring-up log, toolchain root cause, host setup.
 
 ## Credits
 Crafted by [GeekendZone](https://geekendzone.com). Blue Ghost theme inspired by
