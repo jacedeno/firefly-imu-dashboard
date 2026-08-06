@@ -360,10 +360,34 @@ invariant, since both are world-fixed vectors). Needs good coverage on **all
 three** axes — X and Z reached ~80 µT of range easily, Y only 28 µT, and Y
 coverage requires standing the board on its long edge.
 
-**Fallback if the magnetometer stays unreliable:** set `USE_MAG = false` for
-6-DOF. Pitch and roll stay exact and rock steady; yaw free-runs on the gyro and
-is no longer an absolute heading. For a demo where the board is tilted by hand
-that often reads *better* — nothing wanders.
+### Resolution: 6-DOF adopted as the default (2026-08-05)
+
+Rather than keep chasing the magnetometer, `USE_MAG = false` was measured
+head-to-head and won on every axis that matters here. Same protocol throughout:
+board still against a physical mark, rotated by hand, returned against the mark.
+
+| | return error | settling | environment |
+|---|---|---|---|
+| 9-DOF, old calibration | +50.5° | — | corrupted by the desk field |
+| 9-DOF, new calibration | −28.5° | >46 s | still magnetic-dependent |
+| **6-DOF** | **+3.4°** | **0 s** | immune |
+
+Of that 3.4°, 1.2° is the known gyro drift over the 80 s run, so the error
+actually attributable to the rotation is **2.2°**. Settling is instant: put the
+board back and the number is already right — the minute-long "hunting" was the
+magnetometer dragging heading toward a corrupted reference.
+
+The immunity is not theoretical. While flashing the final build the board was
+sitting in a **152 µT** anomaly and the quaternion stayed pinned at identity,
+unaffected. That matters more than absolute heading for a demo in an unknown room.
+
+Cost: yaw is relative, starts at zero on boot and drifts **~0.9 °/min** (~9° over
+a ten-minute demo). The dashboard readout was renamed **HDG → YAW REL** so it
+does not imply a compass that is not there.
+
+Confirmed visually on the dashboard by Jose the same day and adopted as the
+default. 9-DOF remains fully implemented behind the flag for whenever the axis
+sign map above gets re-derived.
 
 ## Plan B: replacement MCU — NOT NEEDED (researched 2026-07-29)
 
