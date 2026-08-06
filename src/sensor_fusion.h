@@ -149,15 +149,30 @@ private:
 class MahonyFilter {
 public:
     MahonyFilter(float kp = 0.4f, float ki = 0.08f, float sampleFreq = 119.0f)
-        : _twoKp(2.0f * kp), _twoKi(2.0f * ki), _freq(sampleFreq),
+        : _twoKp(2.0f * kp), _twoKi(2.0f * ki), _freq(sampleFreq), _dt(1.0f / sampleFreq),
           _q0(1.0f), _q1(0.0f), _q2(0.0f), _q3(0.0f),
           _ibx(0.0f), _iby(0.0f), _ibz(0.0f) {}
 
-    void setSampleFreq(float hz) { if (hz > 1.0f) _freq = hz; }
+    void setSampleFreq(float hz) { if (hz > 1.0f) { _freq = hz; _dt = 1.0f / hz; } }
+
+    // Per-iteration timestep, measured by the caller. The nominal rate is only a
+    // fallback: the real loop runs 107-118 Hz against a nominal 119, so a fixed
+    // dt under-integrates the gyro by ~5% and every rotation falls short.
+    void setDt(float dt) { if (dt > 1e-5f && dt < 0.1f) _dt = dt; }
+
+    // Gravity is the only tilt reference, so a sample must actually look like
+    // gravity. While the board is being moved by hand, |a| departs from 1 g and
+    // the "down" it implies is wrong — in 9-DOF that tilt error couples straight
+    // into heading. Rejecting those samples is what stops a rotation from
+    // permanently displacing yaw.
+    static bool accelUsable(float ax, float ay, float az) {
+        float n2 = ax*ax + ay*ay + az*az;             // in g
+        return n2 > 0.5625f && n2 < 1.5625f;          // 0.75 g .. 1.25 g
+    }
 
     void update(float gx, float gy, float gz, float ax, float ay, float az) {
         float q0 = _q0, q1 = _q1, q2 = _q2, q3 = _q3;
-        if (!(ax == 0.0f && ay == 0.0f && az == 0.0f)) {
+        if (accelUsable(ax, ay, az)) {
             float rn = 1.0f / sqrtf(ax*ax + ay*ay + az*az); ax*=rn; ay*=rn; az*=rn;
             float hvx = q1*q3 - q0*q2, hvy = q0*q1 + q2*q3, hvz = q0*q0 - 0.5f + q3*q3;
             float ex = ay*hvz - az*hvy, ey = az*hvx - ax*hvz, ez = ax*hvy - ay*hvx;
@@ -170,7 +185,7 @@ public:
                    float mx, float my, float mz) {
         if (mx == 0.0f && my == 0.0f && mz == 0.0f) { update(gx, gy, gz, ax, ay, az); return; }
         float q0 = _q0, q1 = _q1, q2 = _q2, q3 = _q3;
-        if (!(ax == 0.0f && ay == 0.0f && az == 0.0f)) {
+        if (accelUsable(ax, ay, az)) {
             float rn = 1.0f / sqrtf(ax*ax + ay*ay + az*az); ax*=rn; ay*=rn; az*=rn;
             rn = 1.0f / sqrtf(mx*mx + my*my + mz*mz); mx*=rn; my*=rn; mz*=rn;
             float q0q0=q0*q0,q0q1=q0*q1,q0q2=q0*q2,q0q3=q0*q3,q1q1=q1*q1,q1q2=q1*q2,q1q3=q1*q3,q2q2=q2*q2,q2q3=q2*q3,q3q3=q3*q3;
@@ -198,14 +213,22 @@ public:
 private:
     void applyFeedback(float &gx, float &gy, float &gz, float ex, float ey, float ez) {
         if (_twoKi > 0.0f) {
-            float dt = 1.0f / _freq;
-            _ibx += _twoKi * ex * dt; _iby += _twoKi * ey * dt; _ibz += _twoKi * ez * dt;
+            _ibx += _twoKi * ex * _dt; _iby += _twoKi * ey * _dt; _ibz += _twoKi * ez * _dt;
+            // Clamp the integral. It models gyro bias, which for this part is a
+            // few dps at most, so anything larger is windup from a transient —
+            // and unclamped windup takes tens of seconds to unwind, which is
+            // exactly the slow "hunting" seen after every rotation.
+            _ibx = clampBias(_ibx); _iby = clampBias(_iby); _ibz = clampBias(_ibz);
             gx += _ibx; gy += _iby; gz += _ibz;
         }
         gx += _twoKp * ex; gy += _twoKp * ey; gz += _twoKp * ez;
     }
+    static float clampBias(float v) {
+        const float LIM = 0.05f;   // rad/s ~= 2.9 dps
+        return v > LIM ? LIM : (v < -LIM ? -LIM : v);
+    }
     void integrate(float q0, float q1, float q2, float q3, float gx, float gy, float gz) {
-        float dt = 1.0f / _freq; gx *= 0.5f*dt; gy *= 0.5f*dt; gz *= 0.5f*dt;
+        float dt = _dt; gx *= 0.5f*dt; gy *= 0.5f*dt; gz *= 0.5f*dt;
         float qa = q0, qb = q1, qc = q2;
         q0 += (-qb*gx - qc*gy - q3*gz);
         q1 += ( qa*gx + qc*gz - q3*gy);
@@ -214,7 +237,7 @@ private:
         float rn = 1.0f / sqrtf(q0*q0 + q1*q1 + q2*q2 + q3*q3);
         _q0 = q0*rn; _q1 = q1*rn; _q2 = q2*rn; _q3 = q3*rn;
     }
-    float _twoKp, _twoKi, _freq;
+    float _twoKp, _twoKi, _freq, _dt;
     float _q0, _q1, _q2, _q3;
     float _ibx, _iby, _ibz;
 };
