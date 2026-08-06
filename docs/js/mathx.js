@@ -23,6 +23,13 @@ export function heading(yawDeg) {
   return ((yawDeg % 360) + 360) % 360;
 }
 
+// Wrap an angle into (-180, 180]. lerpAngle accumulates freely past the +/-180
+// seam, so smoothed roll/yaw must be renormalized before display or they drift
+// unbounded (a yaw of +85.6 would read as -274.4 after one turn).
+export function wrap180(deg) {
+  return ((((deg + 180) % 360) + 360) % 360) - 180;
+}
+
 export function eulerToQuat(rollDeg, pitchDeg, yawDeg) {
   const cr = Math.cos(rollDeg * DEG2RAD / 2), sr = Math.sin(rollDeg * DEG2RAD / 2);
   const cp = Math.cos(pitchDeg * DEG2RAD / 2), sp = Math.sin(pitchDeg * DEG2RAD / 2);

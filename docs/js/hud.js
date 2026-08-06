@@ -1,5 +1,5 @@
 // HUD: rolling charts, eased telemetry readouts, attitude indicator, status.
-import { quatToEuler, heading, smoothK, lerp, lerpAngle } from './mathx.js';
+import { quatToEuler, heading, smoothK, lerp, lerpAngle, wrap180 } from './mathx.js';
 
 const COLORS = { x: '#ff6b6b', y: '#9aca3c', z: '#7fb3ff', zero: 'rgba(154,202,60,.18)' };
 
@@ -54,9 +54,12 @@ export function createHud() {
       el.qy.textContent = s.y.toFixed(3); el.qz.textContent = s.z.toFixed(3);
 
       const e = quatToEuler(d.w, d.x, d.y, d.z);
-      s.roll = lerpAngle(s.roll, e.roll, k);
+      // lerpAngle takes the shortest path but never renormalizes, so wrap the
+      // result: otherwise roll/yaw accumulate past +/-180 forever and disagree
+      // with HDG. pitch comes from asin() and is already bounded to +/-90.
+      s.roll = wrap180(lerpAngle(s.roll, e.roll, k));
       s.pitch = lerp(s.pitch, e.pitch, k);
-      s.yaw = lerpAngle(s.yaw, e.yaw, k);
+      s.yaw = wrap180(lerpAngle(s.yaw, e.yaw, k));
       el.roll.textContent = s.roll.toFixed(1) + '°';
       el.pitch.textContent = s.pitch.toFixed(1) + '°';
       el.yaw.textContent = s.yaw.toFixed(1) + '°';
