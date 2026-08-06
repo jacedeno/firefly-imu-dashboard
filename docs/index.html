@@ -81,7 +81,10 @@
           <div class="adi-bezel"></div>
         </div>
         <div class="adi-meta">
-          <div><span class="k">HDG</span><span id="hdg-val" class="v">000°</span></div>
+          <!-- Relative, not magnetic: the firmware runs 6-DOF, so this angle
+               starts at zero on boot and drifts slowly. Calling it HDG would
+               imply a compass the hardware is not currently providing. -->
+          <div><span class="k">YAW REL</span><span id="hdg-val" class="v">000°</span></div>
           <div><span class="k">CAL</span><span id="cal-val" class="v ok">✓</span></div>
         </div>
       </div>
