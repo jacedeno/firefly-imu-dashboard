@@ -1,7 +1,7 @@
 # CLAUDE.md - Firefly IMU Dashboard
 
 ## Project Overview
-Arduino Nano 33 BLE Sense (nRF52840) + onboard 9-axis IMU → 9-DOF Madgwick fusion → quaternion
+Arduino Nano 33 BLE Sense (nRF52840) + onboard 9-axis IMU → 9-DOF Mahony fusion → quaternion
 streamed over **BLE (GATT notify)** → **Web Bluetooth** dashboard (Three.js) themed as Firefly's
 **Blue Ghost** lunar lander. Hosted on GitHub Pages.
 
@@ -19,7 +19,7 @@ streamed over **BLE (GATT notify)** → **Web Bluetooth** dashboard (Three.js) t
 - **GATT**: custom 128-bit service UUID; one `notify` characteristic.
 - **Packet**: 20 bytes = 10× `int16` (scaled) = quaternion `w,x,y,z` + accel `ax,ay,az` + gyro `gx,gy,gz`.
   20 bytes fits the default BLE payload — no MTU negotiation needed.
-- **Sample rate**: ~104–119 Hz (real ODR of the onboard IMU; feed this as the Madgwick `sampleFreq`).
+- **Sample rate**: ~104–119 Hz (real ODR of the onboard IMU; feed this as the filter `sampleFreq`).
 - **Serial**: 115200 baud (USB CDC port of the Nano — check the actual `/dev/cu.*` / `/dev/ttyACM*`).
 
 ## Build & Upload
@@ -46,16 +46,18 @@ ser.close()
 ```
 
 ## Key Files
-- `src/main.cpp` — firmware: IMU init + read, gyro-bias calibration, 9-DOF Madgwick, magnetometer
+- `src/main.cpp` — firmware: IMU init + read, gyro-bias calibration, 9-DOF Mahony fusion, magnetometer
   calibration, BLE GATT service/characteristic, single `loop()` (BLE.poll + read + fuse + notify).
-- `src/sensor_fusion.h` — Madgwick filter. `update()` = 6-DOF (fallback); `updateMag()` = 9-DOF.
+- `src/sensor_fusion.h` — AHRS filters. **`MahonyFilter` is the one in use** (`main.cpp`);
+  `MadgwickFilter` is kept but unused. Both expose `update()` = 6-DOF (fallback) and
+  `updateMag()` = 9-DOF.
 - `data/` (→ `docs/` for GitHub Pages) — dashboard: `index.html`, `app.js` (Web Bluetooth client +
   Three.js Blue Ghost model + rolling charts), `style.css` (Firefly black/lime theme).
 - `platformio.ini` — board + lib config.
 - `PLAN.md` — full implementation plan and rationale.
 
 ## Architecture
-- **Single core (nRF52840)**: one `loop()` reads the IMU at the sensor rate, runs 9-DOF Madgwick to
+- **Single core (nRF52840)**: one `loop()` reads the IMU at the sensor rate, runs 9-DOF Mahony fusion to
   get a quaternion, packs 10× int16, and updates the BLE characteristic (`notify`). `BLE.poll()` each loop.
 - **Transport**: BLE GATT notify → Web Bluetooth in the browser (Chrome/Edge desktop + Android).
 - **Frontend**: Three.js Blue Ghost lander rotated by the quaternion, resting on legs on a grid;
@@ -64,6 +66,10 @@ ser.close()
 ## Important Notes
 - **Web Bluetooth requires HTTPS + a user gesture**; works in Chrome/Edge on desktop & Android,
   **NOT iOS Safari**. The dashboard must be served from GitHub Pages (or another HTTPS origin).
+- **On Chrome for Linux, Web Bluetooth is OFF by default** — `navigator.bluetooth` is absent and
+  the connect button silently fails. Launch with
+  `google-chrome --enable-experimental-web-platform-features` (or enable
+  `chrome://flags/#enable-experimental-web-platform-features`). See TROUBLESHOOTING.md.
 - **No WiFi, no web server, no LittleFS, no captive portal** — all removed vs. the ESP32 version.
 - **9-DOF fusion needs magnetometer calibration** (hard/soft-iron). If calibration is troublesome,
   fall back to 6-DOF (`update()`) — pitch/roll stay good, yaw drifts slowly.
