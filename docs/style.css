@@ -7,6 +7,10 @@
   --lime:#9aca3c;
   --lime-bright:#b6f24a;
   --gold:#d8b25a;
+  /* GeekendZone brand green, sampled from the official logo. Kept distinct
+     from --lime so the author mark reads as its own identity. */
+  --gz-green:#68a507;
+  --gz-green-bright:#8ad30d;
   --text:#eaf6d6;
   --muted:#8a987a;
   --danger:#ff6b6b;
@@ -100,6 +104,19 @@ b{font-weight:700}
 .brand-text{font-weight:600; letter-spacing:3px; font-size:16px; color:#cde0ad}
 .brand-text b{color:var(--text)}
 .brand-sub{color:var(--lime); letter-spacing:4px}
+
+/* Co-brand: Firefly/Blue Ghost is the theme, GeekendZone is the author. */
+.brand-div{width:1px; height:22px; background:var(--glass-border); margin:0 3px}
+.cobrand{display:flex; align-items:center; gap:7px; text-decoration:none; border-radius:7px;
+  padding:3px 7px 3px 4px; transition:background .18s ease, box-shadow .18s ease}
+.cobrand-mark{width:22px; height:22px; filter:drop-shadow(0 0 5px rgba(104,165,7,.55))}
+.cobrand-text{font-family:var(--font-display); font-weight:600; font-size:14px;
+  letter-spacing:1.6px; color:var(--text); white-space:nowrap}
+.cobrand-text b{color:var(--gz-green); font-weight:700}
+.cobrand:hover{background:rgba(104,165,7,.12); box-shadow:inset 0 0 0 1px rgba(104,165,7,.35)}
+.cobrand:hover .cobrand-text b{color:var(--gz-green-bright)}
+.cobrand:focus-visible{outline:2px solid var(--gz-green-bright); outline-offset:2px}
+
 .status{display:flex; align-items:center; gap:9px}
 .chip{display:inline-flex; align-items:center; gap:7px; font-family:var(--font-mono); font-size:11px;
   padding:5px 10px; border-radius:7px; background:var(--glass); border:1px solid rgba(255,255,255,.06); color:var(--text)}
@@ -122,9 +139,22 @@ b{font-weight:700}
 .frame-bracket.bl{bottom:18px; left:18px; border-right:0; border-top:0}
 .frame-bracket.br{bottom:18px; right:18px; border-left:0; border-top:0}
 
-.credit{position:absolute; right:14px; bottom:12px; z-index:6; font-family:var(--font-mono);
-  font-size:10px; color:rgba(154,202,60,.55); text-decoration:none; letter-spacing:.5px}
-.credit:hover{color:var(--lime)}
+/* Credit sits over a live 3D render whose luminance swings from near-black sky
+   to bright lunar regolith, so it needs its own backing to stay legible. */
+.credit{position:absolute; right:62px; bottom:16px; z-index:6; display:inline-flex;
+  align-items:center; gap:7px; padding:6px 11px 6px 8px; border-radius:999px;
+  font-family:var(--font-mono); font-size:11.5px; letter-spacing:.4px;
+  color:var(--text); text-decoration:none;
+  background:var(--glass); border:1px solid var(--glass-border);
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  box-shadow:0 4px 16px rgba(0,0,0,.4);
+  transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease}
+.credit-mark{width:16px; height:16px; filter:drop-shadow(0 0 4px rgba(104,165,7,.6))}
+.credit b{color:var(--gz-green-bright); font-weight:700; letter-spacing:.6px}
+.credit:hover{border-color:rgba(104,165,7,.55); transform:translateY(-1px);
+  box-shadow:0 6px 20px rgba(0,0,0,.5), 0 0 14px rgba(104,165,7,.25)}
+.credit:hover b{text-decoration:underline; text-underline-offset:2px}
+.credit:focus-visible{outline:2px solid var(--gz-green-bright); outline-offset:2px}
 
 /* ===================== Attitude indicator (ADI) ===================== */
 .adi-wrap{position:absolute; left:20px; bottom:20px; z-index:6; display:flex; align-items:flex-end; gap:12px}
@@ -181,6 +211,8 @@ b{font-weight:700}
 
 /* ===================== Low tier (perf) — drop expensive blur ===================== */
 .tier-low .card,.tier-low .topbar{backdrop-filter:none; -webkit-backdrop-filter:none; background:rgba(10,13,12,.86)}
+/* No blur on low tier — fall back to a solid tint so the credit stays readable. */
+.tier-low .credit{backdrop-filter:none; -webkit-backdrop-filter:none; background:rgba(10,13,12,.88)}
 
 /* ===================== Responsive (mobile) ===================== */
 @media (max-width:820px){
@@ -192,10 +224,14 @@ b{font-weight:700}
     scroll-snap-type:x mandatory}
   .rail .card{min-width:230px; flex:0 0 auto; scroll-snap-align:start}
   .brand-sub{display:none}
+  .cobrand-text{display:none}
+  .cobrand{padding:3px 4px}
   .adi{width:104px; height:104px}
   .status .chip:nth-child(4){display:none}
 }
 @media (max-width:520px){
   .overlay-title{font-size:36px}
   .status .chip-k{display:none}
+  .brand-div,.cobrand{display:none}
+  .credit{right:14px; bottom:12px; font-size:10.5px; padding:5px 9px 5px 7px}
 }
